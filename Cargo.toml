@@ -59,8 +59,9 @@ rcgen = "0.14"
 aho-corasick = "1"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-# System libsqlite3 (no `bundled`): 06 §6.
-rusqlite = { version = "0.41", default-features = false, features = ["limits"] }
+# System libsqlite3 (no `bundled`): 06 §6. Held at 0.40: 0.41 needs SQLite 3.44, newer than the
+# release images' (manylinux_2_28 ships 3.26).
+rusqlite = { version = "0.40.2", default-features = false, features = ["limits"] }
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
 russh-sftp = "3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

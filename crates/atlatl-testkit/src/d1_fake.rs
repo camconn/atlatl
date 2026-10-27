@@ -348,7 +348,7 @@ fn run(s: &mut State, st: &Value, raw: bool) -> Result<Value, (u16, String)> {
             None => {}
         }
     }
-    let cols: Vec<String> = stmt.column_names().map(str::to_owned).collect();
+    let cols: Vec<String> = stmt.column_names().into_iter().map(str::to_owned).collect();
     let mut rows = Vec::new();
     {
         let mut q = stmt

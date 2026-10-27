@@ -1,0 +1,55 @@
+# FRED (Federal Reserve Bank of St. Louis) keyless graph downloads: one CSV per request with the
+# header `observation_date,<SERIES_ID>`, missing observations as empty fields. No key, no paging.
+# The CDN stalls or resets requests from User-Agents it does not know; a curl-style one passes.
+name: fred
+base_url: https://fred.stlouisfed.org/graph
+rate_limit: {rps: 1, max_in_flight: 1}
+defaults:
+  headers:
+    User-Agent: "curl/8.15.0 (compatible; atlatl-examples)"
+    Accept: text/csv
+
+endpoints:
+  # Single endpoint: one fixed window of one series.
+  dff:
+    request:
+      path: /fredgraph.csv
+      params: {id: DFF, cosd: "2025-01-01", coed: "2025-06-30"}
+    decode: {format: csv}
+    records: {primary_key: [observation_date]}
+
+  # Windowed incremental: half-year windows from a fixed start, then from the stored floor.
+  dff_windows:
+    for_each:
+      over: 'range(coalesce(sync.floor, date("2024-01-01")), now(), "6mo")'
+      as: window_start
+    request:
+      path: /fredgraph.csv
+      params:
+        id: DFF
+        cosd: '{{ window_start | date_format("%Y-%m-%d") }}'
+        coed: '{{ window_start | date_add(6, "month") | date_add(-1, "day") | date_format("%Y-%m-%d") }}'
+    decode: {format: csv}
+    records: {primary_key: [observation_date]}
+    sync:
+      floor: {value: 'date_trunc(date_add(now(), -6, "month"), "quarter")', aggregate: set}
+
+  # A literal list of series. The value column is named after the series, so it is renamed to
+  # `value`. An empty field (no observation that day) decodes as null (`null_values` default).
+  series:
+    for_each:
+      over:
+        - {id: DFF, since: "2025-07-01"}
+        - {id: DGS10, since: "2025-07-01"}
+        - {id: UNRATE, since: "2020-01-01"}
+        - {id: GDPC1, since: "2015-01-01"}
+      as: series
+    request:
+      path: /fredgraph.csv
+      params: {id: "{{ series.id }}", cosd: "{{ series.since }}"}
+    decode: {format: csv}
+    records:
+      path: "[].{observation_date: observation_date, value: values(merge(@, {observation_date: `null`}))[?@ != `null`] | [0]}"
+      primary_key: [series_id, observation_date]
+    fields:
+      series_id: series.id

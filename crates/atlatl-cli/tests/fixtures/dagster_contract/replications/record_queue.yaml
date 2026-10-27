@@ -1,0 +1,18 @@
+replications:
+  record_queue:
+    source: record_queue
+    target: lake
+    asset: {group: record_queue, description: Syncs the instrument universe and its ratings}
+    defaults:
+      mode: full-refresh
+    streams:
+      - id: record_queue/instruments
+        from: {endpoint: instruments}
+        object: br.instruments
+        primary_key: [uid]
+        asset: {key: br/record_queue/instruments, deps: [instruments]}
+      - id: record_queue/ratings
+        from: {endpoint: ratings}
+        object: br.ratings
+        primary_key: [uid, date, time, source_name, author]
+        asset: {key: br/record_queue/ratings, deps: [ratings]}

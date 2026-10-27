@@ -1,0 +1,3 @@
+version: 1
+connections:
+  lake: {type: ducklake, catalog: {type: duckdb, path: cat.db}, data_path: "{{ env.ATLATL_TEST_DATA_PATH }}"}

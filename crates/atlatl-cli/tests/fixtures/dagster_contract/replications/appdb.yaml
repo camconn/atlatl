@@ -1,0 +1,12 @@
+replications:
+  appdb:
+    source: appdb_ro
+    target: lake
+    asset: {group: appdb, description: Syncs the application database}
+    streams:
+      - id: appdb/all
+        from: {tables: "appdb.*"}
+        object: "br.appdb_{{ member.table }}"
+        mode: full-refresh
+        on_empty: mirror
+        asset: {key: br/appdb, deps: [appdb/_]}

@@ -1,0 +1,50 @@
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+ignore = [
+    # h2 0.3 via hyper 0.14, which libsql 0.10 (the latest) still uses. atlatl-conn-sqlite's
+    # connector offers ALPN `http/1.1` only (`https::tests::offers_http1_only`), so HTTP/2, and
+    # with it this DATA-frame flood, is never negotiated. Drop when libsql moves to hyper 1.
+    { id = "RUSTSEC-2026-0258", reason = "HTTP/2 is never negotiated: the libsql connector is HTTP/1.1 only" },
+    # Marvin: no fixed `rsa` release exists. russh needs it for RSA SSH keys (SFTP sources); the
+    # private-key operation is our client signature, timed only by the SFTP server we chose to
+    # connect to. Revisit when `rsa` ships constant-time code, or offer Ed25519-only builds.
+    { id = "RUSTSEC-2023-0071", reason = "no fix upstream; only SFTP client auth with RSA keys, against configured servers" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

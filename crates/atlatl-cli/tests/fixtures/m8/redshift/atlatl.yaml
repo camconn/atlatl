@@ -1,0 +1,37 @@
+# Synthetic vendor warehouse moved into the lake family by family (13 §2 "M8+: DB sources").
+# Endpoints come from the test harness through env; nothing here names a real host or account.
+version: 1
+engine: {memory: 1GB, threads: 2, temp_directory: "{{ env.M8_TMP }}"}
+state: {lake: lake}
+
+connections:
+  lake:
+    type: ducklake
+    alias: lake
+    catalog: {type: duckdb, path: "{{ env.M8_CATALOG }}"}
+    data_path: "{{ env.M8_DATA_PATH }}"
+    storage: {type: local}
+
+  warehouse:
+    type: redshift
+    read_only: true
+    data_api:
+      workgroup: example-workgroup
+      database: vendor_db
+      region: us-east-1
+      endpoint: "{{ env.M8_RS_ENDPOINT }}"
+      key_id: {secret: env:M8_RS_KEY}
+      secret: {secret: env:M8_RS_SECRET}
+      poll: {wait: 0s, initial: 5ms, max: 20ms}
+    unload:
+      bucket: "{{ env.M8_BUCKET }}"
+      prefix: atlatl_unload/
+      iam_role: arn:aws:iam::000000000000:role/example-unload
+      read_role: none
+      storage:
+        type: s3
+        region: us-east-1
+        endpoint: "{{ env.M8_S3_ENDPOINT }}"
+        url_style: path
+        key_id: {secret: env:M8_S3_KEY}
+        secret: {secret: env:M8_S3_SECRET}

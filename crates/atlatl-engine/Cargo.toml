@@ -1,0 +1,25 @@
+[package]
+name = "atlatl-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow = { workspace = true, features = ["ffi"] }
+atlatl-core.workspace = true
+duckdb.workspace = true
+regex.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+atlatl-testkit.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-util.workspace = true

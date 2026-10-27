@@ -1,0 +1,22 @@
+# Header auth and 1-based page numbers with a stop condition, a queue of ids between two paged
+# endpoints, and a skip guard on the fan-out.
+name: paged_queue
+base_url: https://api.paged-queue.example/api
+auth: {type: headers, headers: {api_key: "{{ secrets.api_key }}"}}
+rate_limit: {rps: 8}
+rules:
+  - {when: "response.status == 429 or response.status >= 500", action: retry, max_attempts: 3, backoff: {type: exponential, base: 1s}}
+endpoints:
+  orgs:
+    request: {path: /v1/orgs/all}
+    paginate: {type: page, param: pageNumber, start: 1, stop_when: 'response.json.pagination.pageNumber >= response.json.pagination.numPages'}
+    records: {path: "orgs[]", primary_key: [orgId]}
+    emit: {org_ids: record.orgId}
+  rounds:
+    for_each: {over: {queue: org_ids}, as: org_id}
+    request: {path: "/v2/orgs/{{ org_id }}/rounds"}
+    paginate: {type: page, param: pageNumber, start: 1, stop_when: 'response.json.pagination.pageNumber >= response.json.pagination.numPages'}
+    records: {path: "rounds[]", primary_key: [id]}
+    rules:
+      - {when: "response.status == 404", action: skip}
+    max_skipped: {ratio: 0.5, min_items: 2}

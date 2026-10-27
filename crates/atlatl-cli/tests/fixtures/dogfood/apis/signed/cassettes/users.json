@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "api": "signed",
+  "recorded_at": "2026-09-29T17:48:03.741Z",
+  "match": {
+    "ignore_query": [
+      "timestamp",
+      "timestamp"
+    ]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/users/list?clientId=****&timestamp=1790704083",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "35"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[\"dogfood-user-a\",\"dogfood-user-b\"]",
+        "elapsed_ms": 46
+      }
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+# The `windowed` shape (crates/atlatl-http/tests/fixtures/apis/windowed.yaml), plus symbols ->
+# profile (a queue) and news (incremental). `vars.as_of` pins the clock so cassettes replay; left
+# unset, the windows follow `now()` like the base spec.
+name: windowed
+base_url: https://api.windowed.example/api/v1
+auth: {type: query, params: {token: "{{ secrets.api_key }}"}}
+rate_limit: {rps: 1, burst: 30}   # 60 calls/min, 30/s burst cap
+
+endpoints:
+  symbols:
+    description: Listed common stock (full refresh); feeds the `symbols` queue.
+    request: {path: /symbols, params: {venue: XA}}
+    records:
+      path: "[]"
+      filter: 'record.type == "Common"'
+      primary_key: [symbol]
+    emit: {symbols: record.symbol}
+
+  profile:
+    description: One profile per listed symbol; the API answers `{}` for symbols it has no profile for.
+    for_each: {over: {queue: symbols, unique: true}, as: symbol}
+    request: {path: /profile, params: {symbol: "{{ symbol }}"}}
+    records: {filter: "record.ticker != none", primary_key: [ticker]}
+
+  events:
+    for_each:
+      over: 'range(coalesce(sync.floor, date_add(coalesce(vars.as_of, now()), -1, "month")), date_add(coalesce(vars.as_of, now()), 1, "month"), "7d")'
+      as: window_start
+    request:
+      path: /calendar/events
+      params:
+        from: '{{ window_start | date_format("%Y-%m-%d") }}'
+        to: '{{ window_start | date_add(6, "day") | date_format("%Y-%m-%d") }}'
+    records: {path: "events[]", primary_key: [symbol, year, quarter]}
+    sync:
+      floor: {value: 'date_trunc(date_add(coalesce(vars.as_of, now()), -1, "month"), "week")', aggregate: set}
+
+  news:
+    description: News per symbol since the newest article already landed.
+    for_each: {over: [ACME, BOLT], as: symbol}
+    request:
+      path: /news
+      params:
+        symbol: "{{ symbol }}"
+        from: '{{ coalesce(sync.since, vars.news_from) | date_format("%Y-%m-%d") }}'
+        to: '{{ coalesce(vars.as_of, now()) | date_format("%Y-%m-%d") }}'
+    records: {path: "[]", primary_key: [id]}
+    fields: {symbol: symbol}
+    sync:
+      since: {value: record.datetime, aggregate: max}

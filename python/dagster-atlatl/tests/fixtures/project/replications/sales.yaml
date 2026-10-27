@@ -1,0 +1,19 @@
+replications:
+  orders:
+    op: sales
+    source: lake
+    target: lake
+    asset: {group: sales, description: Orders and their lines}
+    streams:
+      - id: sales/orders
+        mode: full-refresh
+        from: {table: src.orders}
+        object: "sales.{{ member.table }}"
+        asset: {key: br/sales/orders, deps: [br/orders], tags: {tier: gold}}
+      - {id: sales/lines, mode: full-refresh, from: {table: src.lines}, object: "sales.{{ member.table }}"}
+  refunds:
+    op: sales
+    source: lake
+    target: lake
+    streams:
+      - {id: sales/refunds, mode: full-refresh, from: {table: src.refunds}, object: "refunds.{{ member.table }}"}

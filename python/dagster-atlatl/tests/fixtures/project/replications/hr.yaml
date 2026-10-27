@@ -1,0 +1,13 @@
+replications:
+  people:
+    source: lake
+    target: lake
+    asset: {group: hr}
+    streams:
+      - id: hr/people
+        mode: full-refresh
+        from: {table: src.people}
+        object: "hr.{{ member.table }}"
+        schema:
+          fields:
+            id: {type: integer, nullable: false}

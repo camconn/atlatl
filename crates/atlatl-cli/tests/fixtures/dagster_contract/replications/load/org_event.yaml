@@ -1,0 +1,66 @@
+# Hub then shards (FK order), all in one transaction.
+replications:
+  org_event:
+    source: lake
+    target: app_pg
+    asset: {group: org_event, description: Uploads the org_event hub + shards from DuckLake au to Postgres}
+    defaults:
+      mode: cdc
+      deletes: {mode: soft, column: deleted_at}
+    streams:
+      - id: load/org_event
+        from: {table: au.org_event}
+        object: app.org_event
+        primary_key: [object_id]
+        columns:
+          include: [object_id, org_id, type, date, updated_at]
+          type: {target_type: app.event_type}
+        asset: {key: org_event/load/app/org_event, deps: [org_event]}
+      - id: load/org_event_listing
+        after: [load/org_event]
+        from: {table: au.org_event_listing}
+        object: app.org_event_listing
+        primary_key: [event_id]
+        columns:
+          include: [event_id, status, proposed_symbol, instrument_id, venue_id, offer_value, offer_value_currency,
+                    unit_price, unit_price_low, unit_price_high, unit_count, unit_count_low, unit_count_high,
+                    notice_url, doc_url, updated_at]
+          status: {target_type: app.listing_status}
+        asset: {key: org_event/load/app/org_event_listing, deps: [org_event_listing]}
+      - id: load/org_event_report
+        after: [load/org_event]
+        from: {table: au.org_event_report}
+        object: app.org_event_report
+        primary_key: [event_id]
+        columns:
+          include: [event_id, fiscal_year, fiscal_period, periodicity, session, call_at, updated_at]
+          periodicity: {target_type: app.periodicity}
+          session: {target_type: app.report_session}
+        asset: {key: org_event/load/app/org_event_report, deps: [org_event_report]}
+      - id: load/org_event_rating
+        after: [load/org_event]
+        from: {table: au.org_event_rating}
+        object: app.org_event_rating
+        primary_key: [event_id]
+        columns:
+          include: [event_id, instrument_id, source_name, author, time, rating_change, rating_current, rating_prior,
+                    target_action, target_current, target_prior, target_currency, updated_at]
+          rating_change: {target_type: app.rating_change}
+          rating_current:
+            transform: "trim(regexp_replace(upper(rating_current), '[^A-Z0-9]+', '_', 'g'), '_')"
+            target_type: app.rating
+          rating_prior:
+            transform: "trim(regexp_replace(upper(rating_prior), '[^A-Z0-9]+', '_', 'g'), '_')"
+            target_type: app.rating
+        asset: {key: org_event/load/app/org_event_rating, deps: [org_event_rating]}
+      - id: load/org_event_funding
+        after: [load/org_event]
+        from: {table: au.org_event_funding}
+        object: app.org_event_funding
+        primary_key: [event_id]
+        columns:
+          include: [event_id, name, category, status, announced_at, completed_at, amount_raised, amount_raised_currency,
+                    pre_value, pre_value_currency, post_value, post_value_currency,
+                    unit_price, unit_price_currency, unlinked_names, updated_at, deleted_at]
+          unlinked_names: {target_type: "text[]"}
+        asset: {key: org_event/load/app/org_event_funding, deps: [org_event_funding]}

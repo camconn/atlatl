@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "api": "queue_chain",
+  "recorded_at": "2026-09-29T17:56:05.435Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities?page_size=3&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "227"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"entities\":[{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\",\"name\":\"ACME Corp\"},{\"id\":\"ent_2\",\"reg_no\":null,\"code\":\"BOLT\",\"name\":\"BOLT Corp\"},{\"id\":\"ent_3\",\"reg_no\":\"0000003\",\"code\":\"CRUX\",\"name\":\"CRUX Corp\"}],\"next_page\":\"e2\"}",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities?page_size=3&next_page=e2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "98"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"entities\":[{\"id\":\"ent_4\",\"reg_no\":\"0000004\",\"code\":\"DYNE\",\"name\":\"DYNE Corp\"}],\"next_page\":null}",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

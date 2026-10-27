@@ -1,0 +1,4 @@
+name: windowed
+endpoints:
+  events:
+    for_each: {over: 'range(date_add(now(), -1, "month"), date_add(now(), 1, "year"), "7d")', as: window_start}

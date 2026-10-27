@@ -1,0 +1,28 @@
+# Hourly delta into the same br tables the daily replications full-merge; hence the shared lock_group.
+replications:
+  warehouse_hourly_est_consensus:
+    source: warehouse
+    target: lake
+    op: warehouse_hourly_est_consensus
+    lock_group: warehouse
+    engine: {threads: 4}
+    asset: {group: warehouse_hourly, description: "Hourly delta of warehouse consensus estimates into br"}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: warehouse_hourly/est_v2/est_core_consf
+        from: {tables: "est_v2.est_core_cons_*f"}
+        primary_key: [sym_id, item_code, period_end, cons_start]
+        window: "cons_start >= current_date - 45"
+        asset: {key: br/warehouse_hourly/est_v2/est_core_consf, deps: [est_v2/est_core_cons__f]}
+      - id: warehouse_hourly/est_v2/est_core_cons_rec
+        from: {table: est_v2.est_core_cons_rec}
+        primary_key: [sym_id, item_code, cons_start]
+        window: "cons_start >= current_date - 45"
+        asset: {key: br/warehouse_hourly/est_v2/est_core_cons_rec, deps: [est_v2/est_core_cons_rec]}
+      - id: warehouse_hourly/est_v2/est_plus_cons
+        from: {tables: "est_v2.est_plus_cons_*"}
+        primary_key: [sym_id, item_code, period_end, cons_start]
+        window: "cons_start >= current_date - 45"
+        asset: {key: br/warehouse_hourly/est_v2/est_plus_cons, deps: [est_v2/est_plus_cons__]}

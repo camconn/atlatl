@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "reqwest::Client::builder", reason = "use atlatl_core::tls::http_client (installs the rustls provider)" },
+    { path = "reqwest::Client::new", reason = "use atlatl_core::tls::http_client (installs the rustls provider)" },
+    { path = "reqwest::ClientBuilder::new", reason = "use atlatl_core::tls::http_client (installs the rustls provider)" },
+]

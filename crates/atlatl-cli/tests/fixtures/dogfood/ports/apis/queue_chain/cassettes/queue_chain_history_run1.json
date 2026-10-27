@@ -1,0 +1,233 @@
+{
+  "version": 1,
+  "api": "queue_chain",
+  "recorded_at": "2026-09-29T17:56:19.160Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities?page_size=3&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "227"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"entities\":[{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\",\"name\":\"ACME Corp\"},{\"id\":\"ent_2\",\"reg_no\":null,\"code\":\"BOLT\",\"name\":\"BOLT Corp\"},{\"id\":\"ent_3\",\"reg_no\":\"0000003\",\"code\":\"CRUX\",\"name\":\"CRUX Corp\"}],\"next_page\":\"e2\"}",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities?page_size=3&next_page=e2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "98"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"entities\":[{\"id\":\"ent_4\",\"reg_no\":\"0000004\",\"code\":\"DYNE\",\"name\":\"DYNE Corp\"}],\"next_page\":null}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_1/reports?page_size=2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "366"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"reports\":[{\"id\":\"rep_11\",\"year\":2013,\"period\":\"FY\",\"start_date\":\"2013-01-01\",\"end_date\":\"2013-12-31\",\"filed_date\":\"2014-02-15\",\"kind_code\":\"income\"},{\"id\":\"rep_12\",\"year\":2014,\"period\":\"P1\",\"start_date\":\"2014-01-01\",\"end_date\":\"2014-12-31\",\"filed_date\":\"2015-02-15\",\"kind_code\":\"balance\"}],\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"next_page\":\"r2\"}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_3/reports?page_size=2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "226"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"reports\":[{\"id\":\"rep_31\",\"year\":2012,\"period\":\"P2\",\"start_date\":\"2012-01-01\",\"end_date\":\"2012-12-31\",\"filed_date\":\"2013-02-15\",\"kind_code\":\"income\"}],\"entity\":{\"id\":\"ent_3\",\"reg_no\":\"0000003\",\"code\":\"CRUX\"},\"next_page\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_4/reports?page_size=2&api_key=****"
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "21"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"error\":\"not found\"}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_1/reports?page_size=2&next_page=r2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "366"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"reports\":[{\"id\":\"rep_13\",\"year\":2014,\"period\":\"TTM\",\"start_date\":\"2014-01-01\",\"end_date\":\"2014-12-31\",\"filed_date\":\"2015-02-15\",\"kind_code\":\"income\"},{\"id\":\"rep_14\",\"year\":2015,\"period\":\"FY\",\"start_date\":\"2015-01-01\",\"end_date\":\"2015-12-31\",\"filed_date\":\"2016-02-15\",\"kind_code\":\"income\"}],\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"next_page\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/reports/rep_11/line_items?api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "308"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"line_items\":[{\"tag\":{\"name\":\"revenue\"},\"value\":1000.5},{\"tag\":{\"name\":\"net_income\"},\"value\":120.25}],\"report\":{\"id\":\"rep_11\",\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"year\":2013,\"period\":\"FY\",\"start_date\":\"2013-01-01\",\"end_date\":\"2013-12-31\",\"filed_date\":\"2014-02-15\",\"kind_code\":\"income\"}}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/reports/rep_12/line_items?api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "261"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"line_items\":[{\"tag\":{\"name\":\"revenue\"},\"value\":300}],\"report\":{\"id\":\"rep_12\",\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"year\":2014,\"period\":\"P1\",\"start_date\":\"2014-01-01\",\"end_date\":\"2014-12-31\",\"filed_date\":\"2015-02-15\",\"kind_code\":\"balance\"}}",
+        "elapsed_ms": 3
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/reports/rep_31/line_items?api_key=****"
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "21"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"error\":\"not found\"}",
+        "elapsed_ms": 4
+      }
+    }
+  ]
+}

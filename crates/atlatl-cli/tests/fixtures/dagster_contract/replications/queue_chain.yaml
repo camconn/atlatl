@@ -1,0 +1,12 @@
+replications:
+  queue_chain:
+    source: queue_chain
+    target: lake
+    asset: {group: queue_chain, description: Syncs the listings calendar}
+    streams:
+      - id: queue_chain/listings
+        from: {endpoint: listings}
+        object: br.listings
+        mode: full-refresh
+        primary_key: [id]
+        asset: {key: br/queue_chain/listings, deps: [listings]}

@@ -1,0 +1,30 @@
+# Split from symbols so a throttled run only re-runs the half that failed.
+replications:
+  throttled_releases:
+    source: throttled
+    target: lake
+    asset: {group: throttled, description: Syncs the quarterly release calendar}
+    streams:
+      - id: throttled/releases
+        from: {endpoint: releases}
+        object: br.releases
+        mode: incremental
+        primary_key: [Code, Tag, Date]
+        columns:
+          Actual: {type: text}
+          ActualValue: {type: text}
+          Code: {type: text}
+          Currency: {type: text}
+          Date: {type: text}
+          Forecast: {type: text}
+          ForecastValue: {type: text}
+          Importance: {type: text}
+          LastUpdate: {type: text}
+          Name: {type: text}
+          Previous: {type: text}
+          PreviousValue: {type: text}
+          Reference: {type: text}
+          Region: {type: text}
+          Session: {type: text}
+          Tag: {type: text}
+        asset: {key: br/throttled/releases, deps: [br/throttled/fanout]}

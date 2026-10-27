@@ -1,0 +1,17 @@
+name: windowed
+base_url: https://api.windowed.example/v1
+auth: {type: query, params: {token: "{{ secrets.api_key }}"}}
+rate_limit: {rps: 1}
+endpoints:
+  events:
+    for_each:
+      over: 'range(coalesce(sync.floor, date_add(now(), -1, "month")), date_add(now(), 1, "year"), "7d")'
+      as: window_start
+    request:
+      path: /calendar/events
+      params:
+        from: '{{ window_start | date_format("%Y-%m-%d") }}'
+        to: '{{ window_start | date_add(6, "day") | date_format("%Y-%m-%d") }}'
+    records: {path: "events[]", primary_key: [code, year, seq]}
+    sync:
+      floor: {value: 'date_trunc(date_add(now(), -1, "month"), "week")', aggregate: set}

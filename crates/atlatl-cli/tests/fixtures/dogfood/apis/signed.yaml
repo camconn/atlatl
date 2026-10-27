@@ -1,0 +1,67 @@
+# An HMAC-signed, per-user API: every request is signed with the app's consumer key (HMAC-SHA256
+# over {content, path, query}, sorted-key JSON, base64 in `Signature`), and per-user endpoints carry
+# the user's `userSecret`, which arrives as a `for_each.secret` item field and is bound as
+# `secrets.item.user_secret` only. Users come from the app database; here, a lake table.
+name: signed
+base_url: https://api.signed.example/api/v1
+auth:
+  type: hmac
+  algorithm: sha256
+  key: "{{ secrets.consumer_key }}"
+  params: {clientId: "{{ secrets.client_id }}", timestamp: "{{ timestamp }}"}
+  canonical: '{{ {"content": body_json, "path": path, "query": query} | tojson(sort_keys=true) }}'
+  encoding: base64
+  placement: {header: Signature}
+rate_limit: {rps: 5, burst: 10, max_in_flight: 2}
+defaults:
+  headers: {Accept: application/json}
+
+endpoints:
+  users:
+    description: Registered users (app-level signature only).
+    request: {path: /users/list}
+    records: {path: "[]", scalar_as: value, primary_key: [value]}
+
+  accounts:
+    description: Accounts per user; feeds `accounts` with the user's credentials.
+    for_each:
+      over: {query: "SELECT user_id, user_secret FROM lake.app.signed_users ORDER BY user_id", connection: lake}
+      as: user
+      secret: [user_secret]
+    request:
+      path: /accounts
+      params: {userId: "{{ user.user_id }}", userSecret: "{{ secrets.item.user_secret }}"}
+    records: {path: "[]", primary_key: [id]}
+    fields: {user_id: user.user_id}
+    emit:
+      accounts: '{"account_id": record.id, "user_id": user.user_id, "user_secret": secrets.item.user_secret}'
+    history: snapshot_only
+
+  positions:
+    for_each: {over: {queue: accounts}, as: account, secret: [user_secret]}
+    request:
+      path: "/accounts/{{ account.account_id }}/positions"
+      params: {userId: "{{ account.user_id }}", userSecret: "{{ secrets.item.user_secret }}"}
+    records:
+      path: "[].{symbol: symbol.symbol.symbol, description: symbol.symbol.description, units: units, price: price, average_purchase_price: average_purchase_price, open_pnl: open_pnl, currency: currency.code}"
+      primary_key: [account_id, symbol]
+    fields: {account_id: account.account_id}
+    history: snapshot_only
+
+  activities:
+    description: Account activities since the newest trade date already landed (small pages).
+    for_each: {over: {queue: accounts}, as: account, secret: [user_secret]}
+    request:
+      path: "/accounts/{{ account.account_id }}/activities"
+      params:
+        userId: "{{ account.user_id }}"
+        userSecret: "{{ secrets.item.user_secret }}"
+        startDate: '{{ coalesce(sync.since, vars.start_date) | date_format("%Y-%m-%d") }}'
+        endDate: "{{ vars.end_date }}"
+    paginate: {type: offset, param: offset, limit_param: limit, limit: 2, total_from: pagination.total}
+    records:
+      path: "data[].{id: id, type: type, symbol: symbol.symbol, units: units, price: price, amount: amount, fee: fee, currency: currency.code, trade_date: trade_date, settlement_date: settlement_date, description: description}"
+      primary_key: [id]
+    fields: {account_id: account.account_id}
+    sync:
+      since: {value: record.trade_date, aggregate: max}

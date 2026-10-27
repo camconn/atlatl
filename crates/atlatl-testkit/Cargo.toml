@@ -1,0 +1,24 @@
+[package]
+name = "atlatl-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+duckdb.workspace = true
+hmac.workspace = true
+httpdate.workspace = true
+rand.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tokio-postgres.workspace = true
+
+[dev-dependencies]
+atlatl-core.workspace = true

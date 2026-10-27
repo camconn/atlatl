@@ -1,0 +1,321 @@
+name: release
+
+# Platform wheels (dagster-atlatl and dbt-atlatl, each bundling the atlatl binary, libduckdb, the DuckDB extensions and,
+# on Linux, libsqlite3)
+# and standalone tarballs, from one build per platform (spec 09 §1). Publishing is chosen per run:
+# the `publish` input (manual runs) or the RELEASE_PUBLISH repo variable (tag pushes), default none.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Where to publish the wheels
+        type: choice
+        options: [none, pypi]
+        default: none
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  DUCKDB_VERSION: v1.5.6
+  ATLATL_EXTENSIONS: ducklake postgres_scanner httpfs aws
+  MATURIN: maturin>=1.9,<2
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        env:
+          PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish || vars.RELEASE_PUBLISH || 'none' }}
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+            exit 1
+          fi
+          case "$PUBLISH" in none | pypi) ;; *) echo "::error::bad publish target: $PUBLISH"; exit 1 ;; esac
+          grep -qx "duckdb=$DUCKDB_VERSION" scripts/fetch-license-texts.sh ||
+            { echo "::error::licenses/ is not pinned to DuckDB $DUCKDB_VERSION; run scripts/fetch-license-texts.sh"; exit 1; }
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >>"$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@1.90
+      - run: scripts/third-party-licenses.sh dist/LICENSE-THIRD-PARTY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: license-third-party
+          path: dist/LICENSE-THIRD-PARTY
+          if-no-files-found: error
+
+  linux:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux_amd64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64
+            libduckdb: libduckdb-linux-amd64.zip
+          - platform: linux_arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
+            libduckdb: libduckdb-linux-arm64.zip
+    runs-on: ${{ matrix.runner }}
+    # glibc 2.28, the official extensions' baseline.
+    container: ${{ matrix.image }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PY: /opt/python/cp312-cp312/bin/python
+      # Replaces the dev rpaths of .cargo/config.toml (RUSTFLAGS overrides target rustflags).
+      RUSTFLAGS: -C link-arg=-Wl,-rpath,$ORIGIN/../lib/atlatl
+      # Link and ship the distro libsqlite3.so.0. The image's PKG_CONFIG_PATH would otherwise pick
+      # its private /opt/_internal/sqlite3 (SONAME libsqlite3.so, plus an absolute rpath).
+      SQLITE3_LIB_DIR: /usr/lib64
+      SQLITE3_NO_PKG_CONFIG: "1"
+      SQLITE_LIB: /usr/lib64/libsqlite3.so.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: license-third-party
+          path: dist
+      - name: Install Rust
+        run: |
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.90
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+      # The binary links libsqlite3 dynamically (06 §6); AlmaLinux 8's 3.26 meets the 3.24 floor.
+      - name: Install SQLite
+        run: |
+          dnf install -y -q sqlite-devel
+          rpm -q sqlite-devel sqlite-libs
+      - name: Fetch libduckdb and extensions
+        run: |
+          mkdir -p target/libduckdb
+          curl -fsSL --retry 3 -o target/libduckdb.zip \
+            "https://github.com/duckdb/duckdb/releases/download/$DUCKDB_VERSION/${{ matrix.libduckdb }}"
+          "$PY" -m zipfile -e target/libduckdb.zip target/libduckdb
+          echo "DUCKDB_LIB_DIR=$PWD/target/libduckdb" >>"$GITHUB_ENV"
+          scripts/fetch-duckdb-extensions.sh ${{ matrix.platform }}
+      - name: Stage wheel data
+        run: |
+          rm -f python/dagster-atlatl/atlatl.data/data/.gitkeep
+          scripts/stage-wheel-data.sh ${{ matrix.platform }} target/libduckdb/libduckdb.so dist/LICENSE-THIRD-PARTY
+      - name: Build wheel
+        working-directory: python/dagster-atlatl
+        run: |
+          "$PY" -m pip install --quiet "$MATURIN"
+          "$PY" -m maturin build --profile dist --locked --auditwheel skip \
+            --compatibility manylinux_2_28 --out ../../dist/wheel
+      # The same binary and staged data, with the dbt-duckdb plugin instead of the Dagster package.
+      - name: Build dbt-atlatl wheel
+        working-directory: python/dbt-atlatl
+        run: |
+          rm -rf atlatl.data && cp -a ../dagster-atlatl/atlatl.data .
+          "$PY" -m maturin build --profile dist --locked --auditwheel skip \
+            --compatibility manylinux_2_28 --out ../../dist/wheel-dbt
+      - name: Check wheel
+        run: |
+          wheel=$(ls dist/wheel/*.whl)
+          auditwheel show "$wheel"
+          rm -rf target/wheel-check && "$PY" -m zipfile -e "$wheel" target/wheel-check
+          rm -rf target/wheel-dbt-check && "$PY" -m zipfile -e dist/wheel-dbt/*.whl target/wheel-dbt-check
+          for f in scripts/atlatl data/lib/atlatl/libduckdb.so data/lib/atlatl/libsqlite3.so.0; do
+            cmp target/wheel-check/*.data/$f target/wheel-dbt-check/*.data/$f || { echo "::error::wheels differ in $f"; exit 1; }
+          done
+          bin=$(ls target/wheel-check/*.data/scripts/atlatl)
+          lib=$(ls target/wheel-check/*.data/data/lib/atlatl/libduckdb.so)
+          sqlite=$(ls target/wheel-check/*.data/data/lib/atlatl/libsqlite3.so.0)
+          runpath=$(readelf -d "$bin" | sed -n 's/.*(\(RUNPATH\|RPATH\)).*\[\(.*\)\]/\2/p')
+          # shellcheck disable=SC2016 # a literal $ORIGIN
+          [ "$runpath" = '$ORIGIN/../lib/atlatl' ] || { echo "::error::binary rpath is '$runpath'"; exit 1; }
+          # The bundled libsqlite3 may only need glibc, plus libz.so.1 (RHEL overlinks it; no zlib symbols are used).
+          for n in $(readelf -d "$sqlite" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+            echo "libsqlite3.so.0 needs $n"
+            case "$n" in
+              libc.so.6 | libm.so.6 | libdl.so.2 | libpthread.so.0 | libz.so.1) ;;
+              *) echo "::error::bundled libsqlite3.so.0 needs $n"; exit 1 ;;
+            esac
+          done
+          for f in "$bin" "$lib" "$sqlite"; do
+            glibc=$(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "$f needs $glibc"
+            [ "$(printf '%s\nGLIBC_2.28\n' "$glibc" | sort -V | tail -1)" = GLIBC_2.28 ] ||
+              { echo "::error::$f needs $glibc (> 2.28)"; exit 1; }
+          done
+      - name: Tarball
+        run: '"$PY" scripts/wheel-to-tarball.py dist/wheel/*.whl ${{ matrix.platform }} dist/tarball dist/LICENSE-THIRD-PARTY'
+      - name: Smoke test
+        run: |
+          # No network where user namespaces allow it; otherwise installs and autoloading are off.
+          wrap=""
+          if unshare -rn true 2>/dev/null; then wrap="unshare -rn"; fi
+          "$PY" -m venv /tmp/venv
+          /tmp/venv/bin/pip install --quiet dist/wheel/*.whl
+          $wrap /tmp/venv/bin/python scripts/smoke-test-prefix.py /tmp/venv "$VERSION" ${{ matrix.platform }} --package
+          "$PY" -m venv /tmp/venv-dbt
+          /tmp/venv-dbt/bin/pip install --quiet dist/wheel-dbt/*.whl
+          $wrap /tmp/venv-dbt/bin/python scripts/smoke-test-prefix.py /tmp/venv-dbt "$VERSION" ${{ matrix.platform }} --package=dbt_atlatl
+          mkdir -p /tmp/tarball && tar -xzf dist/tarball/*.tar.gz -C /tmp/tarball
+          $wrap "$PY" scripts/smoke-test-prefix.py "/tmp/tarball/atlatl-$VERSION-${{ matrix.platform }}" "$VERSION" ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: |
+            dist/wheel/*.whl
+            dist/wheel-dbt/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.platform }}
+          path: dist/tarball/*.tar.gz
+          if-no-files-found: error
+
+  macos:
+    needs: prepare
+    # No SDK cross-link from Linux (spike S6).
+    runs-on: macos-14
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PLATFORM: osx_arm64
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      RUSTFLAGS: -C link-arg=-Wl,-rpath,@executable_path/../lib/atlatl
+      # Link the SDK's libsqlite3 (/usr/lib/libsqlite3.dylib, part of every macOS), never Homebrew's.
+      SQLITE3_NO_PKG_CONFIG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: license-third-party
+          path: dist
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch libduckdb and extensions
+        run: |
+          mkdir -p target/libduckdb
+          curl -fsSL --retry 3 -o target/libduckdb.zip \
+            "https://github.com/duckdb/duckdb/releases/download/$DUCKDB_VERSION/libduckdb-osx-universal.zip"
+          python -m zipfile -e target/libduckdb.zip target/libduckdb
+          # The official dylib is universal; ship arm64 only.
+          lipo target/libduckdb/libduckdb.dylib -thin arm64 -output target/libduckdb/libduckdb.thin.dylib
+          mv target/libduckdb/libduckdb.thin.dylib target/libduckdb/libduckdb.dylib
+          lipo -archs target/libduckdb/libduckdb.dylib
+          echo "DUCKDB_LIB_DIR=$PWD/target/libduckdb" >>"$GITHUB_ENV"
+          scripts/fetch-duckdb-extensions.sh "$PLATFORM"
+      - name: Stage wheel data
+        run: |
+          rm -f python/dagster-atlatl/atlatl.data/data/.gitkeep
+          scripts/stage-wheel-data.sh "$PLATFORM" target/libduckdb/libduckdb.dylib dist/LICENSE-THIRD-PARTY
+      - name: Build wheel
+        working-directory: python/dagster-atlatl
+        run: |
+          python -m pip install --quiet "$MATURIN"
+          python -m maturin build --profile dist --locked --auditwheel skip --out ../../dist/wheel
+      - name: Build dbt-atlatl wheel
+        working-directory: python/dbt-atlatl
+        run: |
+          rm -rf atlatl.data && cp -a ../dagster-atlatl/atlatl.data .
+          python -m maturin build --profile dist --locked --auditwheel skip --out ../../dist/wheel-dbt
+      - name: Check wheel
+        run: |
+          wheel=$(ls dist/wheel/*.whl)
+          case "$wheel" in *macosx_*_arm64.whl) ;; *) echo "::error::unexpected wheel tag: $wheel"; exit 1 ;; esac
+          rm -rf target/wheel-check && python -m zipfile -e "$wheel" target/wheel-check
+          rm -rf target/wheel-dbt-check && python -m zipfile -e dist/wheel-dbt/*.whl target/wheel-dbt-check
+          for f in scripts/atlatl data/lib/atlatl/libduckdb.dylib; do
+            cmp target/wheel-check/*.data/$f target/wheel-dbt-check/*.data/$f || { echo "::error::wheels differ in $f"; exit 1; }
+          done
+          bin=$(ls target/wheel-check/*.data/scripts/atlatl)
+          rpaths=$(otool -l "$bin" | awk '/LC_RPATH/ {getline; getline; print $2}')
+          [ "$rpaths" = '@executable_path/../lib/atlatl' ] || { echo "::error::binary rpaths: $rpaths"; exit 1; }
+          [ "$(lipo -archs "$bin")" = arm64 ] || { echo "::error::binary is not arm64-only"; exit 1; }
+          otool -L "$bin"
+          deps=$(otool -L "$bin" | tail -n +2 | awk '{print $1}')
+          echo "$deps" | grep -qx /usr/lib/libsqlite3.dylib || { echo "::error::binary does not link /usr/lib/libsqlite3.dylib"; exit 1; }
+          for d in $deps; do
+            case "$d" in
+              @rpath/libduckdb.dylib | /usr/lib/* | /System/Library/*) ;;
+              *) echo "::error::binary links $d, outside the wheel and the OS"; exit 1 ;;
+            esac
+          done
+      - name: Tarball
+        run: python scripts/wheel-to-tarball.py dist/wheel/*.whl "$PLATFORM" dist/tarball dist/LICENSE-THIRD-PARTY
+      - name: Smoke test
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install --quiet dist/wheel/*.whl
+          /tmp/venv/bin/python scripts/smoke-test-prefix.py /tmp/venv "$VERSION" "$PLATFORM" --package
+          python -m venv /tmp/venv-dbt
+          /tmp/venv-dbt/bin/pip install --quiet dist/wheel-dbt/*.whl
+          /tmp/venv-dbt/bin/python scripts/smoke-test-prefix.py /tmp/venv-dbt "$VERSION" "$PLATFORM" --package=dbt_atlatl
+          mkdir -p /tmp/tarball && tar -xzf dist/tarball/*.tar.gz -C /tmp/tarball
+          python scripts/smoke-test-prefix.py "/tmp/tarball/atlatl-$VERSION-$PLATFORM" "$VERSION" "$PLATFORM"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-osx_arm64
+          path: |
+            dist/wheel/*.whl
+            dist/wheel-dbt/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-osx_arm64
+          path: dist/tarball/*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: |
+          cd dist
+          sha256sum -- *.whl *.tar.gz | tee SHA256SUMS
+          # PyPI's per-file limit is 100 MiB by default.
+          for f in *.whl; do
+            [ "$(stat -c %s "$f")" -lt 104857600 ] || { echo "::error::$f exceeds 100 MiB"; exit 1; }
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums
+          path: dist/SHA256SUMS
+
+  publish-pypi:
+    needs: [prepare, checksums]
+    if: needs.prepare.outputs.publish == 'pypi'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: wheels
+          merge-multiple: true
+      # Only dbt-atlatl is published for now; dagster-atlatl wheels are build artifacts only.
+      - name: Select dbt-atlatl
+        run: |
+          mkdir dist && mv wheels/dbt_atlatl-*.whl dist/
+          ls dist
+          [ "$(ls dist | wc -l)" -eq 3 ] || { echo "::error::expected 3 dbt-atlatl wheels"; exit 1; }
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

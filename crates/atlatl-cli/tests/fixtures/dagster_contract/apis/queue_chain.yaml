@@ -1,0 +1,11 @@
+# Dependency-bearing parts only (02 §6: specs are read for emit / for_each.over.queue / depends_on until M3).
+name: queue_chain
+endpoints:
+  entities:
+    emit: {entities: record.id}
+  reports:
+    for_each: {over: {queue: entities}, as: entity_id}
+    emit: {reports: record.id}
+  line_items:
+    for_each: {over: {queue: reports}, as: report_id}
+  listings: {}

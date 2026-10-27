@@ -1,0 +1,15 @@
+replications:
+  paged_queue:
+    source: paged_queue
+    target: lake
+    defaults:
+      mode: full-refresh
+    streams:
+      - id: paged_queue/orgs
+        from: {endpoint: orgs}
+        object: br.orgs
+        primary_key: [orgId]
+      - id: paged_queue/rounds
+        from: {endpoint: rounds}
+        object: br.rounds
+        primary_key: [id]

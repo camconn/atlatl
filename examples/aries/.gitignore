@@ -1,0 +1,3 @@
+.lake/
+seed.duckdb
+seed.duckdb.wal

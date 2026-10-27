@@ -1,0 +1,6 @@
+schema:
+  fields:
+    id: {type: string, nullable: false}
+    reg_no: {type: string, nullable: false}  # zero-padded: deliberately string
+    code: {type: string, nullable: false}
+    name: {type: string}

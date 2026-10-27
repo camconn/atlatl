@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "api": "queue_chain",
+  "recorded_at": "2026-09-29T17:56:05.627Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_1/reports?page_size=2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "366"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"reports\":[{\"id\":\"rep_11\",\"year\":2013,\"period\":\"FY\",\"start_date\":\"2013-01-01\",\"end_date\":\"2013-12-31\",\"filed_date\":\"2014-02-15\",\"kind_code\":\"income\"},{\"id\":\"rep_12\",\"year\":2014,\"period\":\"P1\",\"start_date\":\"2014-01-01\",\"end_date\":\"2014-12-31\",\"filed_date\":\"2015-02-15\",\"kind_code\":\"balance\"}],\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"next_page\":\"r2\"}",
+        "elapsed_ms": 16
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_4/reports?page_size=2&api_key=****"
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "21"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"error\":\"not found\"}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/entities/ent_1/reports?page_size=2&next_page=r2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "366"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"reports\":[{\"id\":\"rep_13\",\"year\":2014,\"period\":\"TTM\",\"start_date\":\"2014-01-01\",\"end_date\":\"2014-12-31\",\"filed_date\":\"2015-02-15\",\"kind_code\":\"income\"},{\"id\":\"rep_14\",\"year\":2015,\"period\":\"FY\",\"start_date\":\"2015-01-01\",\"end_date\":\"2015-12-31\",\"filed_date\":\"2016-02-15\",\"kind_code\":\"income\"}],\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"next_page\":null}",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "api": "signed",
+  "recorded_at": "2026-09-29T17:48:04.417Z",
+  "match": {
+    "ignore_query": [
+      "timestamp",
+      "timestamp"
+    ]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a1/positions?userId=dogfood-user-a&userSecret=****&clientId=****&timestamp=1790704084",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "948"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"symbol\":{\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"Acme Corp\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":{\"code\":\"cs\",\"description\":\"Common Stock\"}},\"id\":\"usym-ACME\",\"description\":\"Acme Corp\",\"is_quotable\":true,\"is_tradable\":true},\"units\":10,\"price\":227.52,\"open_pnl\":474.20,\"fractional_units\":null,\"average_purchase_price\":180.10,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"cash_equivalent\":false},{\"symbol\":{\"symbol\":{\"id\":\"sym-IDXT\",\"symbol\":\"IDXT\",\"raw_symbol\":\"IDXT\",\"description\":\"Total Market Fund\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":{\"code\":\"cs\",\"description\":\"Common Stock\"}},\"id\":\"usym-IDXT\",\"description\":\"Total Market Fund\",\"is_quotable\":true,\"is_tradable\":true},\"units\":3.5,\"price\":285.40,\"open_pnl\":123.90,\"fractional_units\":null,\"average_purchase_price\":250.00,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"cash_equivalent\":false}]",
+        "elapsed_ms": 106
+      }
+    }
+  ]
+}

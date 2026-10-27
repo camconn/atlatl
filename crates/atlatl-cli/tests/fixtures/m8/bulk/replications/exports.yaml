@@ -1,0 +1,25 @@
+# A warehouse UNLOAD handed over as a manifest in object storage: applied file group by file
+# group in one commit, or staged whole.
+replications:
+  export_chunked:
+    source: bulk_s3
+    target: lake
+    op: export_manifest
+    streams:
+      - id: export/positions
+        mode: full-refresh
+        from: {files: {url: "s3://{{ env.M8_BUCKET }}/export/run1/manifest", manifest: true}}
+        object: br.positions
+        primary_key: [id]
+        chunk: {by: files, size: 1B}
+
+  export_whole:
+    source: bulk_s3
+    target: lake
+    op: export_manifest
+    streams:
+      - id: export/positions_whole
+        mode: full-refresh
+        from: {files: {url: "s3://{{ env.M8_BUCKET }}/export/run1/manifest", manifest: true}}
+        object: br.positions_whole
+        primary_key: [id]

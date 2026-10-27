@@ -1,0 +1,12 @@
+replications:
+  windowed:
+    source: windowed
+    target: lake
+    asset: {group: windowed, description: Syncs the weekly event calendar}
+    streams:
+      - id: windowed/events
+        from: {endpoint: events}
+        object: br.events
+        mode: incremental
+        primary_key: [code, year, seq]
+        asset: {key: br/windowed/events, deps: [events]}

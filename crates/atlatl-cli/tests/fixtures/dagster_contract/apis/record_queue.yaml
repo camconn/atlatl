@@ -1,0 +1,6 @@
+name: record_queue
+endpoints:
+  instruments:
+    emit: {instruments: record}
+  ratings:
+    for_each: {over: {queue: instruments}, as: inst}

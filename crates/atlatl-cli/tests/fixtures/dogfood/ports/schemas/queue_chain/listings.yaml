@@ -1,0 +1,16 @@
+schema:
+  fields:
+    id: {type: string, nullable: false}
+    code: {type: string, nullable: false}
+    date: {type: date}
+    status: {type: string, values: [priced, expected, withdrawn, postponed]}
+    venue: {type: string, values: [XA, XB]}
+    entity_id: {type: string, nullable: false}
+    entity_name: {type: string}
+    entity_reg_no: {type: string}            # zero-padded registry number: deliberately string
+    security_uid: {type: string}
+    offer_value: {type: decimal}
+    unit_price: {type: decimal}
+    unit_price_low: {type: decimal}
+    unit_price_high: {type: decimal}
+    unit_count: {type: integer}

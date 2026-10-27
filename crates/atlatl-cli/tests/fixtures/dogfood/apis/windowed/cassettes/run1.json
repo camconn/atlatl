@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "api": "windowed",
+  "recorded_at": "2026-09-29T17:48:05.926Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/symbols?venue=XA&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "607"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"currency\":\"USD\",\"description\":\"ACME CORP\",\"displaySymbol\":\"ACME\",\"uid\":\"UID00000ACM1\",\"mic\":\"XAXA\",\"symbol\":\"ACME\",\"symbol2\":\"\",\"type\":\"Common\"},{\"currency\":\"USD\",\"description\":\"INDEX FUND TRUST\",\"displaySymbol\":\"IDXF\",\"uid\":\"UID00000IDX1\",\"mic\":\"XAXB\",\"symbol\":\"IDXF\",\"symbol2\":\"\",\"type\":\"Fund\"},{\"currency\":\"USD\",\"description\":\"BOLT INDUSTRIES\",\"displaySymbol\":\"BOLT\",\"uid\":\"UID00000BLT1\",\"mic\":\"XAXA\",\"symbol\":\"BOLT\",\"symbol2\":\"\",\"type\":\"Common\"},{\"currency\":\"USD\",\"description\":\"DOGFOOD HOLDINGS\",\"displaySymbol\":\"ZZZZ\",\"uid\":\"UID00000ZZZ1\",\"mic\":\"XAXC\",\"symbol\":\"ZZZZ\",\"symbol2\":\"\",\"type\":\"Common\"}]",
+        "elapsed_ms": 38
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/profile?symbol=ACME&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "336"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"country\":\"XA\",\"currency\":\"USD\",\"estimateCurrency\":\"USD\",\"exchange\":\"XA MAIN BOARD\",\"industry\":\"Technology\",\"ipo\":\"1980-12-12\",\"logo\":\"https://static.example.test/logo/ACME.png\",\"marketCapitalization\":3423041.50,\"name\":\"Acme Corp\",\"phone\":\"15550100100\",\"shareOutstanding\":14840.39,\"ticker\":\"ACME\",\"weburl\":\"https://acme.example.test/\"}",
+        "elapsed_ms": 9
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/profile?symbol=BOLT&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "342"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"country\":\"XA\",\"currency\":\"USD\",\"estimateCurrency\":\"USD\",\"exchange\":\"XA MAIN BOARD\",\"industry\":\"Industrials\",\"ipo\":\"1986-03-13\",\"logo\":\"https://static.example.test/logo/BOLT.png\",\"marketCapitalization\":3780512.25,\"name\":\"Bolt Industries\",\"phone\":\"15550100200\",\"shareOutstanding\":7433.98,\"ticker\":\"BOLT\",\"weburl\":\"https://bolt.example.test/\"}",
+        "elapsed_ms": 14
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/profile?symbol=ZZZZ&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{}",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-08-28&to=2026-09-03&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 8
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-04&to=2026-09-10&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "348"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-09-09\",\"epsActual\":1.47,\"epsEstimate\":1.48,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":14926000000,\"revenueEstimate\":15039000000,\"symbol\":\"DYNE\",\"year\":2027},{\"date\":\"2026-09-10\",\"epsActual\":5.31,\"epsEstimate\":5.10,\"hour\":\"amc\",\"quarter\":3,\"revenueActual\":5990000000,\"revenueEstimate\":5910000000,\"symbol\":\"EMBR\",\"year\":2026}]}",
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-11&to=2026-09-17&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 11
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-18&to=2026-09-24&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "174"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-09-22\",\"epsActual\":null,\"epsEstimate\":3.60,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":null,\"revenueEstimate\":22100000000,\"symbol\":\"FERN\",\"year\":2027}]}",
+        "elapsed_ms": 11
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-25&to=2026-10-01&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "174"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-09-29\",\"epsActual\":null,\"epsEstimate\":0.27,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":null,\"revenueEstimate\":11650000000,\"symbol\":\"GLYF\",\"year\":2027}]}",
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-02&to=2026-10-08&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 11
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-09&to=2026-10-15&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "336"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-10-13\",\"epsActual\":null,\"epsEstimate\":4.85,\"hour\":\"bmo\",\"quarter\":3,\"revenueActual\":null,\"revenueEstimate\":44200000000,\"symbol\":\"HALO\",\"year\":2026},{\"date\":\"2026-10-15\",\"epsActual\":null,\"epsEstimate\":6.97,\"hour\":\"amc\",\"quarter\":3,\"revenueActual\":null,\"revenueEstimate\":11500000000,\"symbol\":\"IRIS\",\"year\":2026}]}",
+        "elapsed_ms": 7
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-16&to=2026-10-22&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-23&to=2026-10-29&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "337"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-10-27\",\"epsActual\":null,\"epsEstimate\":3.10,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":null,\"revenueEstimate\":69400000000,\"symbol\":\"BOLT\",\"year\":2027},{\"date\":\"2026-10-29\",\"epsActual\":null,\"epsEstimate\":1.75,\"hour\":\"amc\",\"quarter\":4,\"revenueActual\":null,\"revenueEstimate\":101200000000,\"symbol\":\"ACME\",\"year\":2026}]}",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/news?symbol=ACME&from=2026-09-21&to=2026-09-28&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "727"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"category\":\"company\",\"datetime\":1790366400,\"headline\":\"ACME dogfood headline 131000004\",\"id\":131000004,\"image\":\"\",\"related\":\"ACME\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000004.\",\"url\":\"https://news.example.test/131000004\"},{\"category\":\"company\",\"datetime\":1790241300,\"headline\":\"ACME dogfood headline 131000003\",\"id\":131000003,\"image\":\"\",\"related\":\"ACME\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000003.\",\"url\":\"https://news.example.test/131000003\"},{\"category\":\"company\",\"datetime\":1790082000,\"headline\":\"ACME dogfood headline 131000001\",\"id\":131000001,\"image\":\"\",\"related\":\"ACME\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000001.\",\"url\":\"https://news.example.test/131000001\"}]",
+        "elapsed_ms": 7
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/news?symbol=BOLT&from=2026-09-21&to=2026-09-28&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "485"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"category\":\"company\",\"datetime\":1790423100,\"headline\":\"BOLT dogfood headline 131000005\",\"id\":131000005,\"image\":\"\",\"related\":\"BOLT\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000005.\",\"url\":\"https://news.example.test/131000005\"},{\"category\":\"company\",\"datetime\":1790177400,\"headline\":\"BOLT dogfood headline 131000002\",\"id\":131000002,\"image\":\"\",\"related\":\"BOLT\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000002.\",\"url\":\"https://news.example.test/131000002\"}]",
+        "elapsed_ms": 7
+      }
+    }
+  ]
+}

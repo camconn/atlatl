@@ -1,0 +1,23 @@
+replications:
+  warehouse_est_consensus:
+    source: warehouse
+    target: lake
+    op: warehouse_est_consensus
+    lock_group: warehouse
+    asset: {group: warehouse, description: "Syncs warehouse consensus estimate history (est_core_cons / est_plus_cons) from the warehouse"}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: warehouse/est_v2/est_core_consf
+        from: {tables: "est_v2.est_core_cons_*f"}
+        primary_key: [sym_id, item_code, period_end, cons_start]
+        asset: {key: br/warehouse/est_v2/est_core_consf, deps: [est_v2/est_core_cons__f]}
+      - id: warehouse/est_v2/est_core_cons_rec
+        from: {table: est_v2.est_core_cons_rec}
+        primary_key: [sym_id, item_code, cons_start]
+        asset: {key: br/warehouse/est_v2/est_core_cons_rec, deps: [est_v2/est_core_cons_rec]}
+      - id: warehouse/est_v2/est_plus_cons
+        from: {tables: "est_v2.est_plus_cons_*"}
+        primary_key: [sym_id, item_code, period_end, cons_start]
+        asset: {key: br/warehouse/est_v2/est_plus_cons, deps: [est_v2/est_plus_cons__]}

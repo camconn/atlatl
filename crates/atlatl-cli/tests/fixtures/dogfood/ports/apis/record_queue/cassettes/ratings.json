@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "api": "record_queue",
+  "recorded_at": "2026-09-29T17:56:06.286Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.record-queue.example/api/ratings/listed?code=ACME&uid=UID0001&apikey=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "478"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"meta\":{\"code\":\"ACME\",\"name\":\"Acme Corp\",\"currency\":\"USD\",\"venue\":\"XA\",\"venue_timezone\":\"Etc/UTC\"},\"ratings\":[{\"date\":\"2026-09-01\",\"source_name\":\"Firm One\",\"author\":\"J. Doe\",\"action\":\"upgrade\",\"rating_current\":\"Buy\",\"rating_prior\":\"Hold\",\"target_current\":210.0,\"target_prior\":180.0},{\"date\":\"2026-08-15\",\"source_name\":\"Firm Two\",\"author\":\"\",\"action\":\"maintain\",\"rating_current\":\"Overweight\",\"rating_prior\":\"Overweight\",\"target_current\":25.5,\"target_prior\":25.5}],\"status\":\"ok\"}",
+        "elapsed_ms": 16
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.record-queue.example/api/ratings/listed?code=CRUX&uid=UID0003&apikey=****"
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "52"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"code\":404,\"message\":\"no ratings\",\"status\":\"error\"}",
+        "elapsed_ms": 4
+      }
+    }
+  ]
+}

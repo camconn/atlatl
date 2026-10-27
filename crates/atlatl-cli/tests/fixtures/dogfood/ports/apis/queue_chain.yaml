@@ -1,0 +1,60 @@
+# A cursor-paginated single endpoint (`listings`, nested objects flattened) and a three-level crawl
+# chained through queues: entities -> reports (per entity) -> line_items (per report). Metadata
+# comes from sibling objects of the response (`fields`), and missing parents 404 and are skipped.
+name: queue_chain
+base_url: https://api.queue-chain.example/api
+auth: {type: query, params: {api_key: "{{ secrets.api_key }}"}}
+rate_limit: {min_interval: 100ms, max_in_flight: 4}
+defaults:
+  rules:
+    - {when: "response.status == 429 or response.status >= 500", action: retry, max_attempts: 5, backoff: {type: exponential, base: 2s}}
+endpoints:
+  listings:
+    request: {path: /listings, params: {page_size: 2}}
+    paginate: {type: cursor, param: next_page, from: next_page}
+    records:
+      path: >
+        listings[].{id: id, code: code, date: date, status: status, venue: venue,
+          entity_id: entity.id, entity_name: entity.name, entity_reg_no: entity.reg_no,
+          security_uid: security.uid, offer_value: offer_value, unit_price: unit_price,
+          unit_price_low: unit_price_low, unit_price_high: unit_price_high, unit_count: unit_count}
+      primary_key: [id]
+  entities:
+    request: {path: /entities, params: {page_size: 3}}
+    paginate: {type: cursor, param: next_page, from: next_page}
+    records:
+      path: "entities[?reg_no!=null].{id: id, reg_no: reg_no, code: code, name: name}"
+      primary_key: [id]
+    emit: {entities: record.id}
+  reports:
+    for_each: {over: {queue: entities}, as: entity_id, concurrency: 4}
+    request: {path: "/entities/{{ entity_id }}/reports", params: {page_size: 2}}
+    paginate: {type: cursor, param: next_page, from: next_page}
+    rules: [{when: "response.status == 404", action: skip}]
+    records:
+      path: >
+        reports[?year <= `2014` && (period=='FY' || period=='P1' || period=='P2' || period=='P3' || period=='P4')].{id: id, year: year, period: period, start_date: start_date, end_date: end_date, filed_date: filed_date, kind: kind_code}
+      primary_key: [id]
+    fields:
+      entity_id: response.json.entity.id
+      reg_no: response.json.entity.reg_no
+      code: response.json.entity.code
+    emit: {reports: record.id}
+  line_items:
+    for_each: {over: {queue: reports}, as: report_id, concurrency: 4}
+    request: {path: "/reports/{{ report_id }}/line_items"}
+    rules: [{when: "response.status == 404", action: skip}]
+    records:
+      path: "line_items[].{item: tag.name, value: value}"
+      primary_key: [report_id, item]
+    fields:
+      report_id: response.json.report.id
+      entity_id: response.json.report.entity.id
+      reg_no: response.json.report.entity.reg_no
+      code: response.json.report.entity.code
+      year: response.json.report.year
+      period: response.json.report.period
+      start_date: response.json.report.start_date
+      end_date: response.json.report.end_date
+      filed_date: response.json.report.filed_date
+      kind: response.json.report.kind_code

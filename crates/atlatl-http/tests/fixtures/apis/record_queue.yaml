@@ -1,0 +1,30 @@
+name: record_queue
+base_url: https://api.record-queue.example
+auth: {type: query, params: {apikey: "{{ secrets.api_key }}"}}
+rate_limit: {rps: 1}
+defaults:
+  rules:
+    - {when: "response.status == 429 or response.status >= 500", action: retry, max_attempts: 5, backoff: {type: exponential, base: 2s}}
+endpoints:
+  instruments:
+    request: {path: /instruments, params: {country: Nowhere, type: Common}}
+    records:
+      path: "data[?uid!=null && uid!=''].{code: code, uid: uid, name: name, currency: currency, venue: venue, venue_code: venue_code, country: country, type: type}"
+      primary_key: [uid]
+    emit: {instruments: record}
+  ratings:
+    for_each: {over: {queue: instruments}, as: inst}
+    request:
+      path: /ratings/listed
+      params: {code: "{{ inst.code }}", uid: "{{ inst.uid }}"}
+    rules: [{when: "response.status == 404", action: skip}]
+    records: {path: "ratings[]"}
+    fields:
+      uid: inst.uid
+      code: response.json.meta.code
+      instrument_name: response.json.meta.name
+      currency: response.json.meta.currency
+      venue: response.json.meta.venue
+      venue_code: response.json.meta.venue_code
+      venue_timezone: response.json.meta.venue_timezone
+      instrument_type: response.json.meta.type

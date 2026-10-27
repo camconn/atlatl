@@ -1,0 +1,15 @@
+# Reviewed: formatted money stays string; counts use thousands separators; US-style dates.
+schema:
+  fields:
+    dealId: {type: string, nullable: false}
+    proposedSymbol: {type: string, nullable: false}
+    orgName: {type: string, nullable: false}
+    proposedVenue: {type: string, values: [XA, XB]}
+    proposedPrice: {type: string}            # "$12.00" or a "$10.00-$12.00" range
+    unitsOffered: {type: integer, format: thousands_sep}
+    openedDate: {type: date, format: "%m/%d/%Y"}
+    filedDate: {type: date, format: "%m/%d/%Y"}
+    cancelledDate: {type: date, format: "%m/%d/%Y"}
+    dollarValue: {type: string}              # "$15,000,000"
+    dealStatus: {type: string, values: [Open, Closed, Cancelled]}
+    category: {type: string, nullable: false, values: [open, closed, cancelled]}

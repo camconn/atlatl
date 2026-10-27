@@ -1,0 +1,6 @@
+name: oauth_cursor
+endpoints:
+  sessions:
+    for_each: {over: [NORTH, SOUTH], as: region}
+  live_sessions:
+    for_each: {over: [NORTH, SOUTH], as: region}

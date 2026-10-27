@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "api": "paged_queue",
+  "recorded_at": "2026-09-29T17:56:20.987Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.paged-queue.example/api/v1/orgs/all?pageNumber=1"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "237"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"orgs\":[{\"orgId\":\"org_a\",\"name\":\"Alpha Works\",\"sector\":\"Industrials\",\"totalRaised\":42000000.0},{\"orgId\":\"org_b\",\"name\":\"Beta Labs\",\"sector\":\"Industrials\",\"totalRaised\":9500000.5}],\"pagination\":{\"pageNumber\":1,\"numPages\":2,\"pageSize\":2}}",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.paged-queue.example/api/v1/orgs/all?pageNumber=2"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "148"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"orgs\":[{\"orgId\":\"org_c\",\"name\":\"Gamma Systems\",\"sector\":\"Industrials\",\"totalRaised\":0.0}],\"pagination\":{\"pageNumber\":2,\"numPages\":2,\"pageSize\":2}}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.paged-queue.example/api/v2/orgs/org_a/rounds?pageNumber=1"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "212"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"rounds\":[{\"id\":\"r_a1\",\"orgId\":\"org_a\",\"roundType\":\"Seed\",\"announcedDate\":\"2024-03-01\",\"amountRaised\":2000000.0,\"preMoney\":null,\"investors\":[\"Fund One\"]}],\"pagination\":{\"pageNumber\":1,\"numPages\":2,\"pageSize\":2}}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.paged-queue.example/api/v2/orgs/org_a/rounds?pageNumber=2"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "235"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"rounds\":[{\"id\":\"r_a2\",\"orgId\":\"org_a\",\"roundType\":\"Series A\",\"announcedDate\":\"2025-06-12\",\"amountRaised\":40000000.0,\"preMoney\":160000000.0,\"investors\":[\"Fund One\",\"Fund Two\"]}],\"pagination\":{\"pageNumber\":2,\"numPages\":2,\"pageSize\":2}}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.paged-queue.example/api/v2/orgs/org_b/rounds?pageNumber=1"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "202"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"rounds\":[{\"id\":\"r_b1\",\"orgId\":\"org_b\",\"roundType\":\"Seed\",\"announcedDate\":\"2025-11-20\",\"amountRaised\":9500000.5,\"preMoney\":null,\"investors\":[]}],\"pagination\":{\"pageNumber\":1,\"numPages\":1,\"pageSize\":2}}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.paged-queue.example/api/v2/orgs/org_c/rounds?pageNumber=1"
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "21"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"error\":\"Not found\"}",
+        "elapsed_ms": 3
+      }
+    }
+  ]
+}

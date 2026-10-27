@@ -1,0 +1,20 @@
+# Reviewed: display values (`Actual`, `Revenue` "253.15B") stay string; the numeric twins are
+# decimals; a blank `Tag` is an unscheduled release, told apart by `Date`.
+schema:
+  fields:
+    Code: {type: string, nullable: false}
+    Name: {type: string}
+    Region: {type: string, values: [North, South]}
+    Date: {type: timestamp, format: "%Y-%m-%dT%H:%M:%S", nullable: false}
+    Tag: {type: string}
+    Actual: {type: string}
+    ActualValue: {type: decimal}
+    Forecast: {type: string}
+    ForecastValue: {type: decimal}
+    Previous: {type: string}
+    PreviousValue: {type: decimal}
+    Importance: {type: integer, values: [1, 2, 3]}
+    Revenue: {type: string}
+    Currency: {type: string, values: [USD]}
+    Session: {type: string, values: [before, during, after]}
+    LastUpdate: {type: timestamp, format: "%Y-%m-%dT%H:%M:%S"}

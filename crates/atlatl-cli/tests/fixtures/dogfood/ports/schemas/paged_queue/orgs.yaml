@@ -1,0 +1,6 @@
+schema:
+  fields:
+    orgId: {type: string, nullable: false}
+    name: {type: string, nullable: false}
+    sector: {type: string}
+    totalRaised: {type: decimal}

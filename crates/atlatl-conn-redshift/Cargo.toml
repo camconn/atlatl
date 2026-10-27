@@ -1,0 +1,39 @@
+[package]
+name = "atlatl-conn-redshift"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Live tests (`tests/live.rs`): both, plus `REDSHIFT_*` in the environment or `.env` (12 §5).
+network = []
+redshift = []
+
+[dependencies]
+atlatl-conn-files.workspace = true
+atlatl-conn-postgres.workspace = true
+atlatl-core.workspace = true
+atlatl-ingest.workspace = true
+chrono.workspace = true
+duckdb.workspace = true
+futures.workspace = true
+hmac.workspace = true
+percent-encoding.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+atlatl-testkit.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,15 @@
+# Per-symbol reference and mapping tables: daily only, no hourly counterpart.
+replications:
+  acme_reference:
+    source: warehouse
+    target: lake
+    op: acme_reference
+    lock_group: acme
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - {id: acme/fund/fund_sec_cover, from: {table: fund.fund_sec_cover}, primary_key: [sec_id]}
+      - {id: acme/fund/fund_sec_hist, from: {table: fund.fund_sec_hist}, primary_key: [sec_id, start_date]}
+      - {id: acme/est/est_sec_map, from: {table: est.est_sec_map}, primary_key: [sec_id]}

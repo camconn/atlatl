@@ -1,0 +1,28 @@
+[env]
+# Link the official libduckdb from the GitHub release (cached under target/duckdb-download/)
+# instead of compiling DuckDB. Set DUCKDB_LIB_DIR to use a local copy instead.
+DUCKDB_DOWNLOAD_LIB = "1"
+
+[build]
+# Incremental caches grow by GBs across parallel builds; disk here is tight.
+incremental = false
+
+# libduckdb is linked dynamically; find it next to the binary, never in system paths.
+#   target/<profile>/<bin>  -> deps/ (libduckdb-sys copies it there)
+#   target/<profile>/deps/* -> $ORIGIN (tests)
+#   <prefix>/bin/atlatl     -> ../lib/atlatl (wheel, tarball; own subdir so it never shadows a system libduckdb)
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/deps:$ORIGIN:$ORIGIN/../lib/atlatl"]
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,@executable_path/deps",
+    "-C", "link-arg=-Wl,-rpath,@executable_path",
+    "-C", "link-arg=-Wl,-rpath,@executable_path/../lib/atlatl",
+]
+
+[alias]
+# Live-internet tests (the `network` feature, spec 12 §5); never part of a plain `cargo test`.
+test-network = ["test", "-p", "atlatl-cli", "--features", "network", "--test", "fred_ports"]
+# Live Redshift (`REDSHIFT_*` in the environment or `.env`); creates and drops `atlatl_test_*` schemas.
+test-redshift = ["test", "-p", "atlatl-conn-redshift", "-p", "atlatl-cli", "--features", "atlatl-conn-redshift/network,atlatl-conn-redshift/redshift,atlatl-cli/network,atlatl-cli/redshift", "--test", "live", "--test", "redshift_wire"]

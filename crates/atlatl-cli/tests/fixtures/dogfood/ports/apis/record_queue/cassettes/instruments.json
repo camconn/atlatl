@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "api": "record_queue",
+  "recorded_at": "2026-09-29T17:56:06.170Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.record-queue.example/api/instruments?country=Nowhere&type=Common&apikey=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "586"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"code\":\"ACME\",\"uid\":\"UID0001\",\"name\":\"Acme Corp\",\"currency\":\"USD\",\"venue\":\"XA\",\"country\":\"Nowhere\",\"type\":\"Common\"},{\"code\":\"NOID\",\"uid\":\"\",\"name\":\"No Id Inc\",\"currency\":\"USD\",\"venue\":\"XA\",\"country\":\"Nowhere\",\"type\":\"Common\"},{\"code\":\"BOLT\",\"uid\":\"UID0002\",\"name\":\"Bolt Industries\",\"currency\":\"USD\",\"venue\":\"XA\",\"country\":\"Nowhere\",\"type\":\"Common\"},{\"code\":\"NULL\",\"uid\":null,\"name\":\"Null Co\",\"currency\":\"USD\",\"venue\":\"XA\",\"country\":\"Nowhere\",\"type\":\"Common\"},{\"code\":\"CRUX\",\"uid\":\"UID0003\",\"name\":\"Crux Ltd\",\"currency\":\"USD\",\"venue\":\"XA\",\"country\":\"Nowhere\",\"type\":\"Common\"}]}",
+        "elapsed_ms": 17
+      }
+    }
+  ]
+}

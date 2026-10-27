@@ -1,0 +1,7 @@
+name: paged_queue
+endpoints:
+  orgs:
+    emit: {org_ids: record.orgId}
+  rounds:
+    for_each: {over: {queue: org_ids}, as: org_id}
+    depends_on: [orgs]

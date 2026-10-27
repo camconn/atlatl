@@ -1,0 +1,35 @@
+# M8.1 ports: synthetic APIs in the shapes of the legacy REST vendor ports (single-endpoint, queue
+# chains, a throttled vendor with range() windows), each stream with a reviewed source schema and
+# replayed from cassettes recorded against in-process emulators. The specs use `now()` as a port
+# would; replays pin it to the cassette's `recorded_at`.
+version: 1
+
+state: {lake: lake}
+
+connections:
+  lake:
+    type: ducklake
+    alias: lake
+    catalog: {type: duckdb, path: "{{ env.DOGFOOD_LAKE_CATALOG }}"}
+    data_path: "{{ env.DOGFOOD_LAKE_DATA }}"
+    storage: {type: local}
+
+  monthly:
+    type: rest
+    spec: apis/monthly.yaml
+  queue_chain:
+    type: rest
+    spec: apis/queue_chain.yaml
+    secrets: {api_key: {secret: env:QUEUE_CHAIN_API_KEY}}
+  record_queue:
+    type: rest
+    spec: apis/record_queue.yaml
+    secrets: {api_key: {secret: env:RECORD_QUEUE_API_KEY}}
+  paged_queue:
+    type: rest
+    spec: apis/paged_queue.yaml
+    secrets: {api_key: {secret: env:PAGED_QUEUE_API_KEY}}
+  throttled:
+    type: rest
+    spec: apis/throttled.yaml
+    secrets: {api_key: {secret: env:THROTTLED_API_KEY}}

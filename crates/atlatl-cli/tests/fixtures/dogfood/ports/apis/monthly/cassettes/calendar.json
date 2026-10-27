@@ -1,0 +1,358 @@
+{
+  "version": 1,
+  "api": "monthly",
+  "recorded_at": "2026-09-29T17:56:00.564Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-01",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "351"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":[{\"dealId\":\"D100\",\"proposedSymbol\":\"ACME\",\"orgName\":\"ACME Holdings\",\"proposedVenue\":\"XA\",\"proposedPrice\":\"$12.00\",\"unitsOffered\":\"1,250,000\",\"openedDate\":\"01/15/2026\",\"filedDate\":\"01/02/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Open\"}]},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":[]}},\"message\":null}",
+        "elapsed_ms": 16
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-02",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "618"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":[{\"dealId\":\"D101\",\"proposedSymbol\":\"BOLT\",\"orgName\":\"BOLT Holdings\",\"proposedVenue\":\"XB\",\"proposedPrice\":\"$10.00-$12.00\",\"unitsOffered\":\"800,000\",\"openedDate\":\"02/20/2026\",\"filedDate\":\"02/01/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Open\"}]},\"closed\":{\"rows\":[{\"dealId\":\"D100\",\"proposedSymbol\":\"ACME\",\"orgName\":\"ACME Holdings\",\"proposedVenue\":\"XA\",\"proposedPrice\":\"$12.50\",\"unitsOffered\":\"1,250,000\",\"openedDate\":\"01/15/2026\",\"filedDate\":\"01/02/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Closed\"}]},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-03",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "615"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":[{\"dealId\":\"D101\",\"proposedSymbol\":\"BOLT\",\"orgName\":\"BOLT Holdings\",\"proposedVenue\":\"XB\",\"proposedPrice\":\"$11.00\",\"unitsOffered\":\"800,000\",\"openedDate\":\"02/20/2026\",\"filedDate\":\"02/01/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Closed\"}]},\"cancelled\":{\"rows\":[{\"dealId\":\"D102\",\"proposedSymbol\":\"CRUX\",\"orgName\":\"CRUX Holdings\",\"proposedVenue\":\"XA\",\"proposedPrice\":\"$8.00\",\"unitsOffered\":\"2,000,000\",\"openedDate\":null,\"filedDate\":\"03/03/2026\",\"cancelledDate\":\"03/30/2026\",\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Cancelled\"}]}},\"message\":null}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-04",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-05",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-06",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-07",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-08",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-09",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "351"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":[{\"dealId\":\"D199\",\"proposedSymbol\":\"DYNE\",\"orgName\":\"DYNE Holdings\",\"proposedVenue\":\"XA\",\"proposedPrice\":\"$13.00\",\"unitsOffered\":\"500,000\",\"openedDate\":\"09/01/2026\",\"filedDate\":\"09/01/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Open\"}]},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-10",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

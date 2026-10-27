@@ -1,0 +1,15 @@
+replications:
+  record_queue:
+    source: record_queue
+    target: lake
+    defaults:
+      mode: full-refresh
+    streams:
+      - id: record_queue/instruments
+        from: {endpoint: instruments}
+        object: br.instruments
+        primary_key: [uid]
+      - id: record_queue/ratings
+        from: {endpoint: ratings}
+        object: br.ratings
+        primary_key: [uid, date, source_name, author]

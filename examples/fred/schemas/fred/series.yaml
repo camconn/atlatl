@@ -1,0 +1,8 @@
+# Reviewed against the recorded responses. `value` is NULL where FRED has no observation: DGS10
+# on market holidays, and the UNRATE month BLS never published (October 2025). FRED sends an
+# empty field there.
+schema:
+  fields:
+    series_id: {type: string, nullable: false, values: [DFF, DGS10, UNRATE, GDPC1]}
+    observation_date: {type: date, nullable: false}
+    value: {type: decimal}

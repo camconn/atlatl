@@ -1,0 +1,41 @@
+name: oauth_cursor
+base_url: https://data.oauth-cursor.example/v2
+auth:
+  type: oauth2
+  flow: client_credentials
+  token_url: https://auth.oauth-cursor.example/oauth2/token
+  client_id: "{{ secrets.client_id }}"
+  client_secret: "{{ secrets.client_secret }}"
+  scopes: [sessions.list, sessions.read, live-sessions.list, live-sessions.read]
+rate_limit: {rps: 2, max_in_flight: 2}
+state:
+  history_start: "2026-07-01T00:00:00Z"
+defaults:
+  rules:
+    - {when: "response.status == 429 or response.status >= 500", action: retry, max_attempts: 5, backoff: {type: exponential, base: 2s}}
+endpoints:
+  sessions:
+    for_each: {over: [NORTH, SOUTH], as: region, concurrency: 2}
+    request:
+      path: /sessions
+      params:
+        region: "{{ region }}"
+        start_utc: "{{ state.history_start }}"
+        end_utc: '{{ now() | date_format("%Y-%m-%dT%H:%M:%SZ") }}'
+    paginate: {type: cursor, param: cursor_next, from: data.cursor.next}
+    records:
+      path: "data.items[?period=='P1' || period=='P2' || period=='P3' || period=='P4']"
+      primary_key: [id]
+  live_sessions:
+    for_each: {over: [NORTH, SOUTH], as: region, concurrency: 2}
+    request:
+      path: /live-sessions
+      params:
+        region: "{{ region }}"
+        start_utc: '{{ now() | date_add(-3, "month") | date_format("%Y-%m-%dT%H:%M:%SZ") }}'
+        end_utc: '{{ now() | date_add(12, "month") | date_format("%Y-%m-%dT%H:%M:%SZ") }}'
+    paginate: {type: cursor, param: cursor_next, from: data.cursor.next}
+    records:
+      path: "data.items"
+      filter: 'record.period in ["P1", "P2", "P3", "P4"]'
+      primary_key: [id]

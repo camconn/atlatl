@@ -1,0 +1,46 @@
+# Unscheduled deep-history crawl: entities -> reports -> line_items via queues.
+replications:
+  queue_chain_history:
+    source: queue_chain
+    target: lake
+    asset: {group: queue_chain_history, description: Backfills pre-2014 reports from the per-entity API}
+    defaults:
+      mode: full-refresh
+    streams:
+      - id: queue_chain/entities
+        from: {endpoint: entities}
+        object: br.entities
+        columns: {id: {type: text}, reg_no: {type: text}, code: {type: text}, name: {type: text}}
+        asset: {key: br/queue_chain/entities, deps: [entities]}
+      - id: queue_chain/reports
+        from: {endpoint: reports}
+        object: br.reports
+        columns:
+          id: {type: text}
+          entity_id: {type: text}
+          reg_no: {type: text}
+          code: {type: text}
+          year: {type: text}
+          period: {type: text}
+          start_date: {type: text}
+          end_date: {type: text}
+          filed_date: {type: text}
+          kind: {type: text}
+        asset: {key: br/queue_chain/reports, deps: [reports]}
+      - id: queue_chain/line_items
+        from: {endpoint: line_items}
+        object: br.line_items
+        columns:
+          report_id: {type: text}
+          entity_id: {type: text}
+          reg_no: {type: text}
+          code: {type: text}
+          year: {type: text}
+          period: {type: text}
+          start_date: {type: text}
+          end_date: {type: text}
+          filed_date: {type: text}
+          kind: {type: text}
+          item: {type: text}
+          value: {type: text}
+        asset: {key: br/queue_chain/line_items, deps: [line_items]}

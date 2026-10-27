@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "api": "signed",
+  "recorded_at": "2026-09-29T17:48:04.032Z",
+  "match": {
+    "ignore_query": [
+      "timestamp",
+      "timestamp"
+    ]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts?userId=dogfood-user-a&userSecret=****&clientId=****&timestamp=1790704084",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "743"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"id\":\"acc-a1\",\"brokerage_authorization\":\"auth-dogfood-user-a\",\"portfolio_group\":\"pg-acc-a1\",\"name\":\"Broker One Individual\",\"number\":\"NO-acc-a1\",\"institution_name\":\"Broker One\",\"created_date\":\"2025-01-15T18:04:11.123Z\",\"balance\":{\"total\":{\"amount\":15363.23,\"currency\":\"USD\"}},\"meta\":{\"type\":\"INDIVIDUAL\",\"status\":\"ACTIVE\",\"institution_name\":\"Broker One\"},\"is_paper\":false},{\"id\":\"acc-a2\",\"brokerage_authorization\":\"auth-dogfood-user-a\",\"portfolio_group\":\"pg-acc-a2\",\"name\":\"Broker Two Savings\",\"number\":\"NO-acc-a2\",\"institution_name\":\"Broker Two\",\"created_date\":\"2025-01-15T18:04:11.123Z\",\"balance\":{\"total\":{\"amount\":8120.50,\"currency\":\"CAD\"}},\"meta\":{\"type\":\"INDIVIDUAL\",\"status\":\"ACTIVE\",\"institution_name\":\"Broker Two\"},\"is_paper\":false}]",
+        "elapsed_ms": 48
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts?userId=dogfood-user-b&userSecret=****&clientId=****&timestamp=1790704084",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "377"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"id\":\"acc-b1\",\"brokerage_authorization\":\"auth-dogfood-user-b\",\"portfolio_group\":\"pg-acc-b1\",\"name\":\"Broker Three Personal\",\"number\":\"NO-acc-b1\",\"institution_name\":\"Broker Three\",\"created_date\":\"2025-01-15T18:04:11.123Z\",\"balance\":{\"total\":{\"amount\":3412.00,\"currency\":\"CAD\"}},\"meta\":{\"type\":\"INDIVIDUAL\",\"status\":\"ACTIVE\",\"institution_name\":\"Broker Three\"},\"is_paper\":false}]",
+        "elapsed_ms": 20
+      }
+    }
+  ]
+}

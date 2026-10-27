@@ -1,0 +1,57 @@
+# M8.3a: the warehouse, one family at a time. Each family's daily merge and its frequent delta
+# write the same tables, so they move together: one op (one process), one lock_group.
+#   rates (daily observations, the larger family): a daily merge and an hourly `update_key` delta
+#     on the vintage date, both applied file group by file group (production: e.g. 2GB);
+#   gdp (quarterly): a daily merge and an hourly window over the last ~13 months.
+replications:
+  rates_1d:
+    source: warehouse
+    target: lake
+    op: rates
+    lock_group: fred_dw
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.dw_{{ member.table }}"
+      chunk: {by: files, size: 1B}
+    streams:
+      - {id: dw/rates, from: {tables: "fred.rates_*"}, primary_key: [series_id, observation_date]}
+
+  rates_1h:
+    source: warehouse
+    target: lake
+    op: rates
+    lock_group: fred_dw
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.dw_{{ member.table }}"
+      update_key: realtime_start
+      chunk: {by: files, size: 1B}
+    streams:
+      - {id: dw_1h/rates, from: {tables: "fred.rates_*"}, primary_key: [series_id, observation_date]}
+
+  gdp_1d:
+    source: warehouse
+    target: lake
+    op: gdp
+    lock_group: fred_dw
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.dw_{{ member.table }}"
+    streams:
+      - {id: dw/gdp, from: {table: fred.gdp_quarterly}, primary_key: [series_id, observation_date]}
+
+  gdp_1h:
+    source: warehouse
+    target: lake
+    op: gdp
+    lock_group: fred_dw
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.dw_{{ member.table }}"
+      window: "observation_date >= current_date - 400"
+    streams:
+      - {id: dw_1h/gdp, from: {table: fred.gdp_quarterly}, primary_key: [series_id, observation_date]}

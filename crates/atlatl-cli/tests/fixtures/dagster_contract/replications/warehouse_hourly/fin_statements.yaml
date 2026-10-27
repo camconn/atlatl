@@ -1,0 +1,23 @@
+# Hourly delta into the same br tables the daily replications full-merge; hence the shared lock_group.
+replications:
+  warehouse_hourly_fin_statements:
+    source: warehouse
+    target: lake
+    op: warehouse_hourly_fin_statements
+    lock_group: warehouse
+    engine: {threads: 4}
+    asset: {group: warehouse_hourly, description: "Hourly delta of warehouse reported statements into br"}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: warehouse_hourly/fin_v1/fin_core
+        from: {tables: "fin_v1.fin_core_*"}
+        primary_key: [sym_id, date]
+        window: "date >= current_date - 120"
+        asset: {key: br/warehouse_hourly/fin_v1/fin_core, deps: [fin_v1/fin_core__]}
+      - id: warehouse_hourly/fin_v1/fin_plus
+        from: {tables: "fin_v1.fin_plus_*"}
+        primary_key: [sym_id, date]
+        window: "date >= current_date - 120"
+        asset: {key: br/warehouse_hourly/fin_v1/fin_plus, deps: [fin_v1/fin_plus__]}

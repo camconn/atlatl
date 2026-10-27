@@ -1,0 +1,233 @@
+{
+  "version": 1,
+  "api": "windowed",
+  "recorded_at": "2026-09-29T17:48:02.569Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-08-28&to=2026-09-03&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 106
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-04&to=2026-09-10&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "348"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-09-09\",\"epsActual\":1.47,\"epsEstimate\":1.48,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":14926000000,\"revenueEstimate\":15039000000,\"symbol\":\"DYNE\",\"year\":2027},{\"date\":\"2026-09-10\",\"epsActual\":5.31,\"epsEstimate\":5.10,\"hour\":\"amc\",\"quarter\":3,\"revenueActual\":5990000000,\"revenueEstimate\":5910000000,\"symbol\":\"EMBR\",\"year\":2026}]}",
+        "elapsed_ms": 14
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-11&to=2026-09-17&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 22
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-18&to=2026-09-24&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "174"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-09-22\",\"epsActual\":null,\"epsEstimate\":3.60,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":null,\"revenueEstimate\":22100000000,\"symbol\":\"FERN\",\"year\":2027}]}",
+        "elapsed_ms": 21
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-09-25&to=2026-10-01&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "174"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-09-29\",\"epsActual\":null,\"epsEstimate\":0.27,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":null,\"revenueEstimate\":11650000000,\"symbol\":\"GLYF\",\"year\":2027}]}",
+        "elapsed_ms": 14
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-02&to=2026-10-08&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-09&to=2026-10-15&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "336"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-10-13\",\"epsActual\":null,\"epsEstimate\":4.85,\"hour\":\"bmo\",\"quarter\":3,\"revenueActual\":null,\"revenueEstimate\":44200000000,\"symbol\":\"HALO\",\"year\":2026},{\"date\":\"2026-10-15\",\"epsActual\":null,\"epsEstimate\":6.97,\"hour\":\"amc\",\"quarter\":3,\"revenueActual\":null,\"revenueEstimate\":11500000000,\"symbol\":\"IRIS\",\"year\":2026}]}",
+        "elapsed_ms": 19
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-16&to=2026-10-22&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "13"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[]}",
+        "elapsed_ms": 9
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/calendar/events?from=2026-10-23&to=2026-10-29&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "337"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"events\":[{\"date\":\"2026-10-27\",\"epsActual\":null,\"epsEstimate\":3.10,\"hour\":\"amc\",\"quarter\":1,\"revenueActual\":null,\"revenueEstimate\":69400000000,\"symbol\":\"BOLT\",\"year\":2027},{\"date\":\"2026-10-29\",\"epsActual\":null,\"epsEstimate\":1.75,\"hour\":\"amc\",\"quarter\":4,\"revenueActual\":null,\"revenueEstimate\":101200000000,\"symbol\":\"ACME\",\"year\":2026}]}",
+        "elapsed_ms": 88
+      }
+    }
+  ]
+}

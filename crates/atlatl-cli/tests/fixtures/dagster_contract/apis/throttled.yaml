@@ -1,0 +1,8 @@
+name: throttled
+endpoints:
+  releases:
+    for_each: {over: 'range(date("2015-01-01"), date_add(now(), 12, "month"), "3mo")', as: window_start}
+  symbols:
+    setup:
+      - {name: regions, request: {path: /regions}, records: {path: "[].Region"}, collect: regions}
+    for_each: {over: state.regions, as: region}

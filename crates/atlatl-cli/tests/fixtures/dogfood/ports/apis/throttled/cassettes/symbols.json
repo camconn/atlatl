@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "api": "throttled",
+  "recorded_at": "2026-09-29T17:56:10.180Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/regions?key=****&fmt=json"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "text/plain"
+          ],
+          [
+            "content-length",
+            "29"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "Slow down! Too many requests.",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/regions?key=****&fmt=json"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "60"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"Region\":\"North\"},{\"Region\":\"South\"},{\"Region\":\"Nowhere\"}]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/symbols/region/North?key=****&fmt=json"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "161"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"Code\":\"ACME:XA\",\"Name\":\"Acme Corp\",\"Region\":\"North\",\"Isin\":\"XA0000000011\"},{\"Code\":\"BOLT:XA\",\"Name\":\"Bolt Industries\",\"Region\":\"North\",\"Isin\":\"XA0000000029\"}]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/symbols/region/South?key=****&fmt=json"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "77"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"Code\":\"CRUX:XB\",\"Name\":\"Crux Ltd\",\"Region\":\"South\",\"Isin\":\"XB0000000045\"}]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/symbols/region/Nowhere?key=****&fmt=json"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[]",
+        "elapsed_ms": 4
+      }
+    }
+  ]
+}

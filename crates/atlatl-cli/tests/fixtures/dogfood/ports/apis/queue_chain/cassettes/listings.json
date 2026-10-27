@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "api": "queue_chain",
+  "recorded_at": "2026-09-29T17:56:05.202Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/listings?page_size=2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "584"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"listings\":[{\"id\":\"lst_1\",\"code\":\"ACME\",\"date\":\"2026-02-10\",\"status\":\"priced\",\"venue\":\"XA\",\"entity\":{\"id\":\"ent_1\",\"name\":\"ACME Corp\",\"reg_no\":\"0000001\"},\"security\":{\"uid\":\"UID0001\"},\"offer_value\":250000000.0,\"unit_price\":20.0,\"unit_price_low\":18.0,\"unit_price_high\":21.0,\"unit_count\":12500000},{\"id\":\"lst_2\",\"code\":\"CRUX\",\"date\":\"2026-02-10\",\"status\":\"expected\",\"venue\":\"XA\",\"entity\":{\"id\":\"ent_3\",\"name\":\"CRUX Corp\",\"reg_no\":\"0000003\"},\"security\":null,\"offer_value\":250000000.0,\"unit_price\":null,\"unit_price_low\":18.0,\"unit_price_high\":21.0,\"unit_count\":12500000}],\"next_page\":\"l2\"}",
+        "elapsed_ms": 14
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/listings?page_size=2&next_page=l2&api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "316"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"listings\":[{\"id\":\"lst_3\",\"code\":\"DYNE\",\"date\":\"2026-02-10\",\"status\":\"withdrawn\",\"venue\":\"XA\",\"entity\":{\"id\":\"ent_4\",\"name\":\"DYNE Corp\",\"reg_no\":\"0000004\"},\"security\":{\"uid\":\"UID0004\"},\"offer_value\":250000000.0,\"unit_price\":null,\"unit_price_low\":18.0,\"unit_price_high\":21.0,\"unit_count\":12500000}],\"next_page\":null}",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

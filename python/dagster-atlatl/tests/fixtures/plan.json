@@ -1,0 +1,509 @@
+{
+  "v": 1,
+  "static": true,
+  "env": null,
+  "env_source": null,
+  "run_id": null,
+  "project_root": "/fixture/project",
+  "plan_hash": "2bf63e2d3a2b27f5",
+  "selection": {
+    "replications": [],
+    "streams": [],
+    "tags": [],
+    "with_deps": true
+  },
+  "ops": [
+    {
+      "name": "hr",
+      "replications": [
+        "people"
+      ]
+    },
+    {
+      "name": "sales",
+      "replications": [
+        "orders",
+        "refunds"
+      ]
+    }
+  ],
+  "replications": [
+    {
+      "name": "people",
+      "op": "hr",
+      "file": "replications/hr.yaml",
+      "source": {
+        "name": "lake",
+        "type": "ducklake"
+      },
+      "target": {
+        "name": "lake",
+        "type": "ducklake"
+      },
+      "after": [],
+      "atomic_group": null,
+      "lock_group": null,
+      "lock_timeout_ms": null,
+      "replication_retries": 0,
+      "timeout_ms": null,
+      "retry": {
+        "max_attempts": 5,
+        "backoff": "exponential_jitter",
+        "base_ms": 2000,
+        "max_ms": 300000,
+        "retry_on": [
+          "transient",
+          "throttled",
+          "decode",
+          "conflict",
+          "timeout"
+        ],
+        "budget_ms": null
+      },
+      "streams": [
+        {
+          "id": "hr/people",
+          "role": "selected",
+          "mode": "full-refresh",
+          "from": {
+            "table": "src.people",
+            "tables": null,
+            "exclude": null,
+            "include_views": null,
+            "on_no_match": null,
+            "query": null,
+            "endpoint": null,
+            "files": null
+          },
+          "object": "hr.{{ member.table }}",
+          "primary_key": null,
+          "update_key": null,
+          "window": null,
+          "tags": [],
+          "after": [],
+          "members": [
+            {
+              "name": "src.people",
+              "schema": "src",
+              "table": "people",
+              "pattern": false,
+              "object": null,
+              "window": null,
+              "query": null,
+              "url": null
+            }
+          ],
+          "asset": {
+            "key": "hr/people",
+            "key_path": [
+              "hr",
+              "people"
+            ],
+            "group": "hr",
+            "deps": [],
+            "description": null,
+            "kinds": [
+              "atlatl",
+              "ducklake"
+            ],
+            "tags": {},
+            "code_version": "cb9d2da539b97ca0"
+          },
+          "config_hash": "343d215fe27fbdfa",
+          "source_schema": "inline"
+        }
+      ],
+      "steps": [
+        {
+          "id": "extract:hr/people:src.people",
+          "kind": "extract",
+          "stream": "hr/people",
+          "member": "src.people",
+          "depends_on": []
+        },
+        {
+          "id": "stage:hr/people:src.people",
+          "kind": "stage",
+          "stream": "hr/people",
+          "member": "src.people",
+          "depends_on": [
+            "extract:hr/people:src.people"
+          ]
+        },
+        {
+          "id": "validate:hr/people:src.people",
+          "kind": "validate",
+          "stream": "hr/people",
+          "member": "src.people",
+          "depends_on": [
+            "stage:hr/people:src.people"
+          ]
+        },
+        {
+          "id": "apply:hr/people",
+          "kind": "apply",
+          "stream": "hr/people",
+          "depends_on": [
+            "validate:hr/people:src.people"
+          ]
+        },
+        {
+          "id": "commit",
+          "kind": "commit",
+          "depends_on": [
+            "apply:hr/people"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "orders",
+      "op": "sales",
+      "file": "replications/sales.yaml",
+      "source": {
+        "name": "lake",
+        "type": "ducklake"
+      },
+      "target": {
+        "name": "lake",
+        "type": "ducklake"
+      },
+      "after": [],
+      "atomic_group": null,
+      "lock_group": null,
+      "lock_timeout_ms": null,
+      "replication_retries": 0,
+      "timeout_ms": null,
+      "retry": {
+        "max_attempts": 5,
+        "backoff": "exponential_jitter",
+        "base_ms": 2000,
+        "max_ms": 300000,
+        "retry_on": [
+          "transient",
+          "throttled",
+          "decode",
+          "conflict",
+          "timeout"
+        ],
+        "budget_ms": null
+      },
+      "streams": [
+        {
+          "id": "sales/orders",
+          "role": "selected",
+          "mode": "full-refresh",
+          "from": {
+            "table": "src.orders",
+            "tables": null,
+            "exclude": null,
+            "include_views": null,
+            "on_no_match": null,
+            "query": null,
+            "endpoint": null,
+            "files": null
+          },
+          "object": "sales.{{ member.table }}",
+          "primary_key": null,
+          "update_key": null,
+          "window": null,
+          "tags": [],
+          "after": [],
+          "members": [
+            {
+              "name": "src.orders",
+              "schema": "src",
+              "table": "orders",
+              "pattern": false,
+              "object": null,
+              "window": null,
+              "query": null,
+              "url": null
+            }
+          ],
+          "asset": {
+            "key": "br/sales/orders",
+            "key_path": [
+              "br",
+              "sales",
+              "orders"
+            ],
+            "group": "sales",
+            "deps": [
+              "br/orders"
+            ],
+            "description": "Orders and their lines",
+            "kinds": [
+              "atlatl",
+              "ducklake"
+            ],
+            "tags": {
+              "tier": "gold"
+            },
+            "code_version": "fa5f59bbedf96a0a"
+          },
+          "config_hash": "7a30a568de38a7aa",
+          "source_schema": null
+        },
+        {
+          "id": "sales/lines",
+          "role": "selected",
+          "mode": "full-refresh",
+          "from": {
+            "table": "src.lines",
+            "tables": null,
+            "exclude": null,
+            "include_views": null,
+            "on_no_match": null,
+            "query": null,
+            "endpoint": null,
+            "files": null
+          },
+          "object": "sales.{{ member.table }}",
+          "primary_key": null,
+          "update_key": null,
+          "window": null,
+          "tags": [],
+          "after": [],
+          "members": [
+            {
+              "name": "src.lines",
+              "schema": "src",
+              "table": "lines",
+              "pattern": false,
+              "object": null,
+              "window": null,
+              "query": null,
+              "url": null
+            }
+          ],
+          "asset": {
+            "key": "sales/lines",
+            "key_path": [
+              "sales",
+              "lines"
+            ],
+            "group": "sales",
+            "deps": [],
+            "description": "Orders and their lines",
+            "kinds": [
+              "atlatl",
+              "ducklake"
+            ],
+            "tags": {},
+            "code_version": "2401611666b74317"
+          },
+          "config_hash": "6b8d4daa485e986f",
+          "source_schema": null
+        }
+      ],
+      "steps": [
+        {
+          "id": "extract:sales/orders:src.orders",
+          "kind": "extract",
+          "stream": "sales/orders",
+          "member": "src.orders",
+          "depends_on": []
+        },
+        {
+          "id": "stage:sales/orders:src.orders",
+          "kind": "stage",
+          "stream": "sales/orders",
+          "member": "src.orders",
+          "depends_on": [
+            "extract:sales/orders:src.orders"
+          ]
+        },
+        {
+          "id": "validate:sales/orders:src.orders",
+          "kind": "validate",
+          "stream": "sales/orders",
+          "member": "src.orders",
+          "depends_on": [
+            "stage:sales/orders:src.orders"
+          ]
+        },
+        {
+          "id": "extract:sales/lines:src.lines",
+          "kind": "extract",
+          "stream": "sales/lines",
+          "member": "src.lines",
+          "depends_on": []
+        },
+        {
+          "id": "stage:sales/lines:src.lines",
+          "kind": "stage",
+          "stream": "sales/lines",
+          "member": "src.lines",
+          "depends_on": [
+            "extract:sales/lines:src.lines"
+          ]
+        },
+        {
+          "id": "validate:sales/lines:src.lines",
+          "kind": "validate",
+          "stream": "sales/lines",
+          "member": "src.lines",
+          "depends_on": [
+            "stage:sales/lines:src.lines"
+          ]
+        },
+        {
+          "id": "apply:sales/orders",
+          "kind": "apply",
+          "stream": "sales/orders",
+          "depends_on": [
+            "validate:sales/orders:src.orders",
+            "validate:sales/lines:src.lines"
+          ]
+        },
+        {
+          "id": "apply:sales/lines",
+          "kind": "apply",
+          "stream": "sales/lines",
+          "depends_on": [
+            "validate:sales/orders:src.orders",
+            "validate:sales/lines:src.lines",
+            "apply:sales/orders"
+          ]
+        },
+        {
+          "id": "commit",
+          "kind": "commit",
+          "depends_on": [
+            "apply:sales/orders",
+            "apply:sales/lines"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "refunds",
+      "op": "sales",
+      "file": "replications/sales.yaml",
+      "source": {
+        "name": "lake",
+        "type": "ducklake"
+      },
+      "target": {
+        "name": "lake",
+        "type": "ducklake"
+      },
+      "after": [],
+      "atomic_group": null,
+      "lock_group": null,
+      "lock_timeout_ms": null,
+      "replication_retries": 0,
+      "timeout_ms": null,
+      "retry": {
+        "max_attempts": 5,
+        "backoff": "exponential_jitter",
+        "base_ms": 2000,
+        "max_ms": 300000,
+        "retry_on": [
+          "transient",
+          "throttled",
+          "decode",
+          "conflict",
+          "timeout"
+        ],
+        "budget_ms": null
+      },
+      "streams": [
+        {
+          "id": "sales/refunds",
+          "role": "selected",
+          "mode": "full-refresh",
+          "from": {
+            "table": "src.refunds",
+            "tables": null,
+            "exclude": null,
+            "include_views": null,
+            "on_no_match": null,
+            "query": null,
+            "endpoint": null,
+            "files": null
+          },
+          "object": "refunds.{{ member.table }}",
+          "primary_key": null,
+          "update_key": null,
+          "window": null,
+          "tags": [],
+          "after": [],
+          "members": [
+            {
+              "name": "src.refunds",
+              "schema": "src",
+              "table": "refunds",
+              "pattern": false,
+              "object": null,
+              "window": null,
+              "query": null,
+              "url": null
+            }
+          ],
+          "asset": {
+            "key": "sales/refunds",
+            "key_path": [
+              "sales",
+              "refunds"
+            ],
+            "group": null,
+            "deps": [],
+            "description": null,
+            "kinds": [
+              "atlatl",
+              "ducklake"
+            ],
+            "tags": {},
+            "code_version": "b879d47ad7107c13"
+          },
+          "config_hash": "2f961fca9f589026",
+          "source_schema": null
+        }
+      ],
+      "steps": [
+        {
+          "id": "extract:sales/refunds:src.refunds",
+          "kind": "extract",
+          "stream": "sales/refunds",
+          "member": "src.refunds",
+          "depends_on": []
+        },
+        {
+          "id": "stage:sales/refunds:src.refunds",
+          "kind": "stage",
+          "stream": "sales/refunds",
+          "member": "src.refunds",
+          "depends_on": [
+            "extract:sales/refunds:src.refunds"
+          ]
+        },
+        {
+          "id": "validate:sales/refunds:src.refunds",
+          "kind": "validate",
+          "stream": "sales/refunds",
+          "member": "src.refunds",
+          "depends_on": [
+            "stage:sales/refunds:src.refunds"
+          ]
+        },
+        {
+          "id": "apply:sales/refunds",
+          "kind": "apply",
+          "stream": "sales/refunds",
+          "depends_on": [
+            "validate:sales/refunds:src.refunds"
+          ]
+        },
+        {
+          "id": "commit",
+          "kind": "commit",
+          "depends_on": [
+            "apply:sales/refunds"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "api": "windowed",
+  "recorded_at": "2026-09-29T17:48:01.572Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/symbols?venue=XA&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "607"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"currency\":\"USD\",\"description\":\"ACME CORP\",\"displaySymbol\":\"ACME\",\"uid\":\"UID00000ACM1\",\"mic\":\"XAXA\",\"symbol\":\"ACME\",\"symbol2\":\"\",\"type\":\"Common\"},{\"currency\":\"USD\",\"description\":\"INDEX FUND TRUST\",\"displaySymbol\":\"IDXF\",\"uid\":\"UID00000IDX1\",\"mic\":\"XAXB\",\"symbol\":\"IDXF\",\"symbol2\":\"\",\"type\":\"Fund\"},{\"currency\":\"USD\",\"description\":\"BOLT INDUSTRIES\",\"displaySymbol\":\"BOLT\",\"uid\":\"UID00000BLT1\",\"mic\":\"XAXA\",\"symbol\":\"BOLT\",\"symbol2\":\"\",\"type\":\"Common\"},{\"currency\":\"USD\",\"description\":\"DOGFOOD HOLDINGS\",\"displaySymbol\":\"ZZZZ\",\"uid\":\"UID00000ZZZ1\",\"mic\":\"XAXC\",\"symbol\":\"ZZZZ\",\"symbol2\":\"\",\"type\":\"Common\"}]",
+        "elapsed_ms": 62
+      }
+    }
+  ]
+}

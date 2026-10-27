@@ -1,0 +1,24 @@
+[package]
+name = "atlatl-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+atlatl-core.workspace = true
+atlatl-engine.workspace = true
+duckdb.workspace = true
+indexmap.workspace = true
+minijinja.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+atlatl-testkit.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

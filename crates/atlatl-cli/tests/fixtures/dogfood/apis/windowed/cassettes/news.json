@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "api": "windowed",
+  "recorded_at": "2026-09-29T17:48:03.283Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/news?symbol=ACME&from=2026-09-21&to=2026-09-28&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "727"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"category\":\"company\",\"datetime\":1790366400,\"headline\":\"ACME dogfood headline 131000004\",\"id\":131000004,\"image\":\"\",\"related\":\"ACME\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000004.\",\"url\":\"https://news.example.test/131000004\"},{\"category\":\"company\",\"datetime\":1790241300,\"headline\":\"ACME dogfood headline 131000003\",\"id\":131000003,\"image\":\"\",\"related\":\"ACME\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000003.\",\"url\":\"https://news.example.test/131000003\"},{\"category\":\"company\",\"datetime\":1790082000,\"headline\":\"ACME dogfood headline 131000001\",\"id\":131000001,\"image\":\"\",\"related\":\"ACME\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000001.\",\"url\":\"https://news.example.test/131000001\"}]",
+        "elapsed_ms": 127
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/news?symbol=BOLT&from=2026-09-21&to=2026-09-28&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "485"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"category\":\"company\",\"datetime\":1790423100,\"headline\":\"BOLT dogfood headline 131000005\",\"id\":131000005,\"image\":\"\",\"related\":\"BOLT\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000005.\",\"url\":\"https://news.example.test/131000005\"},{\"category\":\"company\",\"datetime\":1790177400,\"headline\":\"BOLT dogfood headline 131000002\",\"id\":131000002,\"image\":\"\",\"related\":\"BOLT\",\"source\":\"Dogfood Wire\",\"summary\":\"Synthetic article 131000002.\",\"url\":\"https://news.example.test/131000002\"}]",
+        "elapsed_ms": 14
+      }
+    }
+  ]
+}

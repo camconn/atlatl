@@ -1,0 +1,30 @@
+replications:
+  windowed:
+    source: windowed
+    target: lake
+    streams:
+      - id: windowed/symbols
+        from: {endpoint: symbols}
+        object: br.symbols
+        mode: full-refresh
+        primary_key: [symbol]
+      - id: windowed/profile
+        from: {endpoint: profile}
+        object: br.profile
+        mode: full-refresh
+        primary_key: [ticker]
+        infer: safe
+      - id: windowed/events
+        from: {endpoint: events}
+        object: br.events
+        mode: incremental
+        primary_key: [symbol, year, quarter]
+        infer: safe
+        vars: {as_of: "2026-09-28"}
+      - id: windowed/news
+        from: {endpoint: news}
+        object: br.news
+        mode: incremental
+        primary_key: [id]
+        infer: safe
+        vars: {as_of: "2026-09-28", news_from: "2026-09-21"}

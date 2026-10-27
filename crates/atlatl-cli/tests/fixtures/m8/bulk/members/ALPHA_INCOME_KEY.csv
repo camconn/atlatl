@@ -1,0 +1,3 @@
+Column,Name,Units,Balance,Vendor ID
+total_revenue,Total Revenue,USD,credit,rev01
+net_income_loss,Net Income (Loss),USD,credit,ni01

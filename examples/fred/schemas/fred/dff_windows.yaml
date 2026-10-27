@@ -1,0 +1,5 @@
+# Reviewed against the recorded responses: ISO dates, one value per calendar day, never empty.
+schema:
+  fields:
+    observation_date: {type: date, nullable: false}
+    DFF: {type: decimal, nullable: false}

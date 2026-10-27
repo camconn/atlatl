@@ -1,0 +1,30 @@
+# Synthetic vendor bulk exports (13 §2 "M8+: files"). Paths and endpoints come from the test
+# harness through env.
+version: 1
+engine: {memory: 1GB, threads: 2, temp_directory: "{{ env.M8_TMP }}"}
+state: {lake: lake}
+
+connections:
+  lake:
+    type: ducklake
+    alias: lake
+    catalog: {type: duckdb, path: "{{ env.M8_CATALOG }}"}
+    data_path: "{{ env.M8_DATA_PATH }}"
+    storage: {type: local}
+
+  # The directory a job downloads the signed bulk links into.
+  bulk:
+    type: files
+    read_only: true
+
+  bulk_s3:
+    type: files
+    read_only: true
+    storage:
+      type: s3
+      provider: config
+      region: us-east-1
+      endpoint: "{{ env.M8_S3_ENDPOINT }}"
+      url_style: path
+      key_id: {secret: env:M8_S3_KEY}
+      secret: {secret: env:M8_S3_SECRET}

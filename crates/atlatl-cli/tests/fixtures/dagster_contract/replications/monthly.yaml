@@ -1,0 +1,25 @@
+replications:
+  monthly:
+    source: monthly
+    target: lake
+    asset: {group: monthly, description: Syncs the monthly listings calendar (open/closed/cancelled)}
+    streams:
+      - id: monthly/calendar
+        from: {endpoint: calendar}
+        object: br.calendar
+        mode: incremental
+        primary_key: [dealId, category]
+        columns:
+          dealId: {type: text}
+          proposedSymbol: {type: text}
+          orgName: {type: text}
+          proposedVenue: {type: text}
+          proposedPrice: {type: text}
+          unitsOffered: {type: text}
+          openedDate: {type: text}
+          filedDate: {type: text}
+          cancelledDate: {type: text}
+          dollarValue: {type: text}
+          dealStatus: {type: text}
+          category: {type: text}
+        asset: {key: br/monthly/calendar, deps: [calendar]}

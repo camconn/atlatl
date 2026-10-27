@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "api": "signed",
+  "recorded_at": "2026-09-29T17:48:04.818Z",
+  "match": {
+    "ignore_query": [
+      "timestamp",
+      "timestamp"
+    ]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a1/activities?userId=dogfood-user-a&userSecret=****&startDate=2026-09-01&endDate=2026-09-28&offset=0&limit=2&clientId=****&timestamp=1790704084",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "1074"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"id\":\"act-a1-1\",\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"ACME dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":227.52,\"units\":2,\"amount\":-455.04,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"BUY\",\"option_type\":\"\",\"description\":\"BUY dogfood\",\"trade_date\":\"2026-09-02T14:30:00Z\",\"settlement_date\":\"2026-09-02T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-1\"},{\"id\":\"act-a1-2\",\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"ACME dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":0,\"units\":0,\"amount\":2.60,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"DIVIDEND\",\"option_type\":\"\",\"description\":\"DIVIDEND dogfood\",\"trade_date\":\"2026-09-12T00:00:00Z\",\"settlement_date\":\"2026-09-12T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-2\"}],\"pagination\":{\"offset\":0,\"limit\":2,\"total\":4}}",
+        "elapsed_ms": 39
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a1/activities?userId=dogfood-user-a&userSecret=****&startDate=2026-09-01&endDate=2026-09-28&offset=2&limit=2&clientId=****&timestamp=1790704084",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "1076"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"id\":\"act-a1-3\",\"symbol\":{\"id\":\"sym-IDXT\",\"symbol\":\"IDXT\",\"raw_symbol\":\"IDXT\",\"description\":\"IDXT dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":285.40,\"units\":1.5,\"amount\":-428.10,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"BUY\",\"option_type\":\"\",\"description\":\"BUY dogfood\",\"trade_date\":\"2026-09-15T15:05:00Z\",\"settlement_date\":\"2026-09-15T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-3\"},{\"id\":\"act-a1-4\",\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"ACME dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":231.10,\"units\":-1,\"amount\":231.10,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"SELL\",\"option_type\":\"\",\"description\":\"SELL dogfood\",\"trade_date\":\"2026-09-22T14:30:00Z\",\"settlement_date\":\"2026-09-22T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-4\"}],\"pagination\":{\"offset\":2,\"limit\":2,\"total\":4}}",
+        "elapsed_ms": 7
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+Ticker,Fiscal Year,Fiscal Period,Total Revenue,Net Income (Loss),EPS - Diluted,1Y Growth %,Currency,Ticker
+AAA,2024,FY,2.98e18,-4.34e20,1.23,NULL,USD,AAA
+BBB,2024,FY,,"NULL",0.5,12.5%,USD,BBB
+CCC,2023,FY,100,NULL,"1,234.5",-3,EUR,CCC

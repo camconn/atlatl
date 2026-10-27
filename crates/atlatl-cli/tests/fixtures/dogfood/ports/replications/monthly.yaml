@@ -1,0 +1,10 @@
+replications:
+  monthly:
+    source: monthly
+    target: lake
+    streams:
+      - id: monthly/calendar
+        from: {endpoint: calendar}
+        object: br.calendar
+        mode: incremental
+        primary_key: [dealId, category]

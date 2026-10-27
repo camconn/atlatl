@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "api": "throttled",
+  "recorded_at": "2026-09-29T17:56:30.981Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2026-01-01&end=2026-03-31"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "321"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"Code\":\"CRUX:XB\",\"Name\":\"CRUX:XB results\",\"Region\":\"South\",\"Date\":\"2026-02-03T12:30:00\",\"Tag\":\"Q2\",\"Actual\":\"0.33\",\"ActualValue\":0.33,\"Forecast\":\"1.05\",\"ForecastValue\":1.05,\"Previous\":\"0.98\",\"PreviousValue\":0.98,\"Importance\":2,\"Revenue\":\"253.15B\",\"Currency\":\"USD\",\"Session\":\"during\",\"LastUpdate\":\"2026-02-03T12:30:00\"}]",
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2026-04-01&end=2026-06-30"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2026-07-01&end=2026-09-30"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "635"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"Code\":\"DYNE:XB\",\"Name\":\"DYNE:XB results\",\"Region\":\"South\",\"Date\":\"2026-09-29T12:00:00\",\"Tag\":\"Q3\",\"Actual\":\"0.42\",\"ActualValue\":0.42,\"Forecast\":\"1.05\",\"ForecastValue\":1.05,\"Previous\":\"0.98\",\"PreviousValue\":0.98,\"Importance\":2,\"Revenue\":\"253.15B\",\"Currency\":\"USD\",\"Session\":\"after\",\"LastUpdate\":\"2026-09-29T12:00:00\"},{\"Code\":\"EMBR:XA\",\"Name\":\"EMBR:XA results\",\"Region\":\"North\",\"Date\":\"2026-09-29T20:00:00\",\"Tag\":\"Q3\",\"Actual\":\"\",\"ActualValue\":null,\"Forecast\":\"1.05\",\"ForecastValue\":1.05,\"Previous\":\"0.98\",\"PreviousValue\":0.98,\"Importance\":1,\"Revenue\":\"253.15B\",\"Currency\":\"USD\",\"Session\":\"after\",\"LastUpdate\":\"2026-09-29T20:00:00\"}]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2026-10-01&end=2026-12-31"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2027-01-01&end=2027-03-31"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[]",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2027-04-01&end=2027-06-30"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[]",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.throttled.example/api/releases?key=****&fmt=json&start=2027-07-01&end=2027-09-30"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[]",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

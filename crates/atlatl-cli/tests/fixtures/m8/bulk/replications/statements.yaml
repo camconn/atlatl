@@ -1,0 +1,63 @@
+# One archive per statement, holding the wide data CSV and a column dictionary with a different
+# schema (`<STATEMENT>_KEY.csv`); only the data member is read. The tables were created by the
+# previous loader: its header cleaning and its `_legacy_loaded_at` epoch column are kept.
+replications:
+  bulk_statements:
+    source: bulk
+    target: lake
+    op: bulk_statements
+    defaults:
+      mode: full-refresh
+      vars: {bulk_dir: "{{ env.M8_BULK_DIR }}"}
+      naming: clean_csv
+      columns: {"*": {type: text}}
+      metadata: {loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}
+    streams:
+      - id: bulk/alpha_income
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/ALPHA_INCOME.zip"
+            archive: {member: ALPHA_INCOME.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.alpha_income
+      - id: bulk/alpha_balance
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/ALPHA_BALANCE.tar.gz"
+            archive: {member: "export/ALPHA_BALANCE.csv"}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.alpha_balance
+
+  # The same statement read straight from object storage (archives are fetched whole first).
+  bulk_statements_s3:
+    source: bulk_s3
+    target: lake
+    op: bulk_statements_s3
+    defaults:
+      mode: full-refresh
+      naming: clean_csv
+      columns: {"*": {type: text}}
+      metadata: {loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}
+    streams:
+      - id: bulk_s3/alpha_income
+        from:
+          files:
+            url: "s3://{{ env.M8_BUCKET }}/bulk/ALPHA_INCOME.zip"
+            archive: {member: ALPHA_INCOME.csv}
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.alpha_income_s3
+
+  # A member glob that also catches the dictionary: two schemas, never silently unioned.
+  bulk_both_members:
+    source: bulk
+    target: lake
+    streams:
+      - id: bulk/both
+        mode: full-refresh
+        from:
+          files:
+            url: "{{ env.M8_BULK_DIR }}/ALPHA_INCOME.zip"
+            archive: {member: "ALPHA_INCOME*.csv"}
+        object: br.both

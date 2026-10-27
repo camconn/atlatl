@@ -1,0 +1,158 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/duckdb-download
+          key: cargo-clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-clippy-${{ runner.os }}-
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ATLATL_EXTENSION_DIR: ${{ github.workspace }}/extensions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/duckdb-download
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-test-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ hashFiles('scripts/fetch-duckdb-extensions.sh') }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - run: scripts/fetch-duckdb-extensions.sh
+      - run: docker version
+      - run: cargo test --workspace --all-targets --locked
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/duckdb-download
+          key: cargo-msrv-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-msrv-${{ runner.os }}-
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - run: cargo +1.90 check --workspace --all-targets --locked
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python/dagster-atlatl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/dagster-atlatl/uv.lock
+      - run: uv sync --locked --no-install-project
+      - run: uv run --no-sync ruff check
+      - run: uv run --no-sync ruff format --check
+      - run: uv run --no-sync pyright
+      - run: uv run --no-sync pytest
+
+  # The consumer's dbt-duckdb (pinned in python/dbt-compat) against what the atlatl binary writes,
+  # and the dbt-atlatl plugin driving that binary from dbt.
+  dbt-compat:
+    runs-on: ubuntu-latest
+    env:
+      ATLATL_EXTENSION_DIR: ${{ github.workspace }}/extensions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/duckdb-download
+          key: cargo-compat-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-compat-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ hashFiles('scripts/fetch-duckdb-extensions.sh') }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - run: scripts/fetch-duckdb-extensions.sh
+      - run: cargo build -p atlatl-cli --locked
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            python/dbt-compat/uv.lock
+            python/dbt-atlatl/uv.lock
+      - run: uv sync --locked
+        working-directory: python/dbt-compat
+      - run: uv run --no-sync ruff check
+        working-directory: python/dbt-compat
+      - run: uv run --no-sync ruff format --check
+        working-directory: python/dbt-compat
+      - run: uv run --no-sync pyright
+        working-directory: python/dbt-compat
+      - run: uv run --no-sync pytest
+        working-directory: python/dbt-compat
+      - run: uv sync --locked --no-install-project
+        working-directory: python/dbt-atlatl
+      - run: uv run --no-sync ruff check
+        working-directory: python/dbt-atlatl
+      - run: uv run --no-sync ruff format --check
+        working-directory: python/dbt-atlatl
+      - run: uv run --no-sync pyright
+        working-directory: python/dbt-atlatl
+      - run: uv run --no-sync pytest
+        working-directory: python/dbt-atlatl

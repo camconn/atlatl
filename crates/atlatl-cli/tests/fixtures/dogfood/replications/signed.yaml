@@ -1,0 +1,28 @@
+replications:
+  signed:
+    source: signed
+    target: lake
+    streams:
+      - id: signed/users
+        from: {endpoint: users}
+        object: br.users
+        mode: full-refresh
+        primary_key: [value]
+      - id: signed/accounts
+        from: {endpoint: accounts}
+        object: br.accounts
+        mode: full-refresh
+        primary_key: [id]
+      - id: signed/positions
+        from: {endpoint: positions}
+        object: br.positions
+        mode: full-refresh
+        primary_key: [account_id, symbol]
+        infer: safe
+      - id: signed/activities
+        from: {endpoint: activities}
+        object: br.activities
+        mode: incremental
+        primary_key: [id]
+        infer: safe
+        vars: {start_date: "2026-09-01", end_date: "2026-09-28"}

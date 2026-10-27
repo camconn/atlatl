@@ -1,0 +1,50 @@
+[package]
+name = "atlatl-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "atlatl"
+path = "src/main.rs"
+
+[features]
+# Tests that reach the internet (`cargo test-network`, spec 12 §5).
+network = []
+# Tests against live Redshift (with `network`; `REDSHIFT_*` in the environment or `.env`).
+redshift = []
+
+[dependencies]
+tracing.workspace = true
+tokio-util.workspace = true
+tokio.workspace = true
+atlatl-cdc.workspace = true
+atlatl-conn-ducklake.workspace = true
+atlatl-conn-redshift.workspace = true
+atlatl-core.workspace = true
+atlatl-engine.workspace = true
+atlatl-http.workspace = true
+atlatl-ingest.workspace = true
+atlatl-run.workspace = true
+clap.workspace = true
+duckdb.workspace = true
+indexmap.workspace = true
+schemars.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+atlatl-conn-postgres.workspace = true
+atlatl-conn-sqlite.workspace = true
+tempfile.workspace = true
+atlatl-testkit.workspace = true
+base64.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+tokio-postgres.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true

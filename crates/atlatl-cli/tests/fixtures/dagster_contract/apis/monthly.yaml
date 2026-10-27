@@ -1,0 +1,4 @@
+name: monthly
+endpoints:
+  calendar:
+    for_each: {over: 'range(date("1996-01-01"), date_add(now(), 1, "month"), "1mo")', as: window_start}

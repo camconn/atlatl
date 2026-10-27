@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "api": "windowed",
+  "recorded_at": "2026-09-29T17:48:02.053Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/profile?symbol=ACME&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "336"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"country\":\"XA\",\"currency\":\"USD\",\"estimateCurrency\":\"USD\",\"exchange\":\"XA MAIN BOARD\",\"industry\":\"Technology\",\"ipo\":\"1980-12-12\",\"logo\":\"https://static.example.test/logo/ACME.png\",\"marketCapitalization\":3423041.50,\"name\":\"Acme Corp\",\"phone\":\"15550100100\",\"shareOutstanding\":14840.39,\"ticker\":\"ACME\",\"weburl\":\"https://acme.example.test/\"}",
+        "elapsed_ms": 102
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.windowed.example/api/v1/profile?symbol=ZZZZ&token=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "2"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{}",
+        "elapsed_ms": 11
+      }
+    }
+  ]
+}

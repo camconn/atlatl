@@ -1,0 +1,42 @@
+# Throttled vendor: spacing-based throttling answered with a plain-text 409 (no Content-Type) or a
+# 200 "slow down" body; quarterly windows from a fixed start and a setup-collected fan-out.
+name: throttled
+base_url: https://api.throttled.example
+defaults:
+  params: {key: "{{ secrets.api_key }}", fmt: json}
+rate_limit:
+  rps: 0.2
+  min_interval: 250ms
+  scope: connection
+throttle_patterns: ["slow down"]
+rules:
+  - when: 'response.status == 409 or "slow down" in response.text'
+    action: retry
+    class: throttled
+    backoff: {type: exponential_jitter, base: 5s}
+    max_attempts: 5
+    message: "throttled (status={{ response.status }}, attempt={{ request.attempts }})"
+
+endpoints:
+  releases:
+    for_each:
+      over: 'range(coalesce(sync.floor, date("2015-01-01")), date_add(now(), 12, "month"), "3mo")'
+      as: window_start
+    request:
+      path: /releases
+      params:
+        start: '{{ window_start | date_format("%Y-%m-%d") }}'
+        end: '{{ window_start | date_add(3, "month") | date_add(-1, "day") | date_format("%Y-%m-%d") }}'
+    records: {path: "[]", primary_key: [Code, Tag, Date]}
+    sync:
+      floor: {value: 'date_trunc(date_add(now(), -6, "month"), "quarter")', aggregate: set}
+
+  symbols:
+    setup:
+      - name: regions
+        request: {path: /regions}
+        records: {path: "[].Region", scalar_as: value}
+        collect: regions
+    for_each: {over: state.regions, as: region}
+    request: {path: "/symbols/region/{{ region }}"}
+    records: {path: "[]", primary_key: [Code]}

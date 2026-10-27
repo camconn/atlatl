@@ -1,0 +1,21 @@
+# Disabled upstream (rate limit); kept intact so re-enabling is one edit per stream.
+replications:
+  oauth_cursor:
+    source: oauth_cursor
+    target: lake
+    asset: {group: oauth_cursor, description: Syncs historical and live sessions for two regions}
+    defaults:
+      mode: incremental
+      enabled: false
+      columns: {year: {type: integer}}
+    streams:
+      - id: oauth_cursor/sessions
+        from: {endpoint: sessions}
+        object: br.sessions
+        primary_key: [id]
+        asset: {key: br/oauth_cursor/sessions}
+      - id: oauth_cursor/live_sessions
+        from: {endpoint: live_sessions}
+        object: br.live_sessions
+        primary_key: [id]
+        asset: {key: br/oauth_cursor/live_sessions}

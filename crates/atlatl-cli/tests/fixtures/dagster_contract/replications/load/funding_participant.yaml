@@ -1,0 +1,13 @@
+replications:
+  funding_participant:
+    source: lake
+    target: app_pg
+    asset: {group: funding_participant, description: Uploads the au funding_participant from DuckLake au to Postgres}
+    streams:
+      - id: load/funding_participant
+        from: {table: au.funding_participant}
+        object: app.funding_participant
+        mode: cdc
+        primary_key: [participant_org_id, funding_event_id]
+        deletes: {mode: soft, column: deleted_at}
+        asset: {key: target/app/funding_participant, deps: [funding_participant]}

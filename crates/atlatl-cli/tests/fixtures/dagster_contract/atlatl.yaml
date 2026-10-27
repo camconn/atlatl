@@ -1,0 +1,100 @@
+# A synthetic project in the shapes of a legacy deployment: Postgres wildcard
+# discovery, overlapping daily/hourly warehouse families, bulk files, REST queues and windows,
+# and lake → Postgres loads. Placeholders only: no real hosts, buckets, accounts or secrets.
+version: 1
+
+environments:
+  names: [dev, prod]
+  default: dev
+  select_from_env: DBT_PROFILE
+  base: prod
+  dev:
+    # Vendor APIs are the same in every environment.
+    allow_base: [queue_chain, record_queue, windowed, throttled, monthly, paged_queue, oauth_cursor]
+
+state:
+  lake: lake
+  locks: lake.catalog
+
+connections:
+  lake:
+    type: ducklake
+    alias: catalog
+    catalog:
+      type: postgres
+      host: catalog.example.internal
+      database: lake_meta
+      user: etl
+      password: {secret: env:PG_PASSWORD}
+      sslmode: require
+    data_path: s3://example-lake-bucket/lake/ducklake/
+    storage: {type: s3, provider: credential_chain, region: us-east-1}
+    environments:
+      dev:
+        catalog: {host: localhost, port: 20947, user: postgres, password: password, sslmode: disable}
+        data_path: "{{ env.DUCKLAKE_DATA_PATH }}"
+        storage: {type: local}
+
+  app_pg:
+    type: postgres
+    host: app-db.example.internal
+    database: postgres
+    user: etl
+    password: {secret: env:PG_PASSWORD}
+    sslmode: require
+    environments:
+      dev: {host: localhost, user: postgres, password: password, sslmode: disable}
+
+  appdb_ro:
+    type: postgres
+    host: appdb.example.internal
+    database: appdb
+    user: etl
+    password: {secret: env:PG_PASSWORD}
+    sslmode: require
+    read_only: true
+
+  warehouse:
+    type: redshift
+    access: data_api
+    read_only: true
+    data_api: {workgroup: example-workgroup, database: wh_db, auth: iam, region: us-east-1}
+    unload:
+      bucket: "{{ env.STORAGE_BUCKET }}"
+      prefix: atlatl_unload/
+      iam_role: arn:aws:iam::000000000000:role/example-warehouse-unload
+
+  # Local directory a Python asset downloads the bulk zips into.
+  bulk_files:
+    type: files
+    read_only: true
+
+  queue_chain:
+    type: rest
+    spec: apis/queue_chain.yaml
+    secrets: {api_key: {secret: env:QUEUE_CHAIN_API_KEY}}
+  record_queue:
+    type: rest
+    spec: apis/record_queue.yaml
+    secrets: {api_key: {secret: env:RECORD_QUEUE_API_KEY}}
+  windowed:
+    type: rest
+    spec: apis/windowed.yaml
+    secrets: {api_key: {secret: env:WINDOWED_API_KEY}}
+  throttled:
+    type: rest
+    spec: apis/throttled.yaml
+    secrets: {api_key: {secret: env:THROTTLED_API_KEY}}
+  monthly:
+    type: rest
+    spec: apis/monthly.yaml
+  paged_queue:
+    type: rest
+    spec: apis/paged_queue.yaml
+    secrets: {api_key: {secret: env:PAGED_QUEUE_API_KEY}}
+  oauth_cursor:
+    type: rest
+    spec: apis/oauth_cursor.yaml
+    secrets:
+      client_id: {secret: env:OAUTH_CURSOR_CLIENT_ID}
+      client_secret: {secret: env:OAUTH_CURSOR_CLIENT_SECRET}

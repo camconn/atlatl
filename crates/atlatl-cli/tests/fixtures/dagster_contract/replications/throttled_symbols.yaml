@@ -1,0 +1,12 @@
+replications:
+  throttled_symbols:
+    source: throttled
+    target: lake
+    asset: {group: throttled, description: Syncs per-region symbols}
+    streams:
+      - id: throttled/symbols
+        from: {endpoint: symbols}
+        object: br.symbols
+        mode: incremental
+        primary_key: [Code]
+        asset: {key: br/throttled/symbols, deps: [br/throttled/fanout]}

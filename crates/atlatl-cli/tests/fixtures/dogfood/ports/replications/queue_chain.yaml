@@ -1,0 +1,28 @@
+replications:
+  queue_chain:
+    source: queue_chain
+    target: lake
+    streams:
+      - id: queue_chain/listings
+        from: {endpoint: listings}
+        object: br.listings
+        mode: full-refresh
+        primary_key: [id]
+  queue_chain_history:
+    source: queue_chain
+    target: lake
+    defaults:
+      mode: full-refresh
+    streams:
+      - id: queue_chain/entities
+        from: {endpoint: entities}
+        object: br.entities
+        primary_key: [id]
+      - id: queue_chain/reports
+        from: {endpoint: reports}
+        object: br.reports
+        primary_key: [id]
+      - id: queue_chain/line_items
+        from: {endpoint: line_items}
+        object: br.line_items
+        primary_key: [report_id, item]

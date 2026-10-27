@@ -1,0 +1,33 @@
+# Consensus history: the largest family. Both replications apply UNLOADed file groups one after
+# another inside the one commit (04 §7); production would use a size like 2GB, not 1B.
+replications:
+  acme_consensus:
+    source: warehouse
+    target: lake
+    op: acme_consensus
+    lock_group: acme
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+      chunk: {by: files, size: 1B}
+    streams:
+      - {id: acme/est/est_basic_consf, from: {tables: "est.est_basic_cons_*f"}, primary_key: [sec_id, metric, fp_end, window_start]}
+      - {id: acme/est/est_basic_cons_rec, from: {table: est.est_basic_cons_rec}, primary_key: [sec_id, metric, window_start]}
+      - {id: acme/est/est_adv_cons, from: {tables: "est.est_adv_cons_*"}, primary_key: [sec_id, metric, fp_end, window_start]}
+
+  acme_hourly_consensus:
+    source: warehouse
+    target: lake
+    op: acme_consensus
+    lock_group: acme
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+      chunk: {by: files, size: 1B}
+      window: "window_start >= current_date - 45"
+    streams:
+      - {id: acme_hourly/est/est_basic_consf, from: {tables: "est.est_basic_cons_*f"}, primary_key: [sec_id, metric, fp_end, window_start]}
+      - {id: acme_hourly/est/est_basic_cons_rec, from: {table: est.est_basic_cons_rec}, primary_key: [sec_id, metric, window_start]}
+      - {id: acme_hourly/est/est_adv_cons, from: {tables: "est.est_adv_cons_*"}, primary_key: [sec_id, metric, fp_end, window_start]}

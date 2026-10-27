@@ -1,0 +1,14 @@
+schema:
+  fields:
+    report_id: {type: string, nullable: false}
+    item: {type: string, nullable: false}
+    value: {type: decimal}
+    entity_id: {type: string, nullable: false}
+    reg_no: {type: string}
+    code: {type: string}
+    year: {type: integer}
+    period: {type: string, values: [FY, P1, P2, P3, P4]}
+    start_date: {type: date}
+    end_date: {type: date}
+    filed_date: {type: date}
+    kind: {type: string, values: [income, balance, cashflow]}

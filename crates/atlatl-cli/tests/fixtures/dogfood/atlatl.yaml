@@ -1,0 +1,26 @@
+# Dogfood project (M3.12, M8.1): synthetic REST APIs in the shapes of the ported vendors, replayed
+# from cassettes recorded against in-process emulators. The lake is a LocalLake whose paths the
+# tests supply; no real hosts or secrets.
+version: 1
+
+state: {lake: lake}
+
+connections:
+  lake:
+    type: ducklake
+    alias: lake
+    catalog: {type: duckdb, path: "{{ env.DOGFOOD_LAKE_CATALOG }}"}
+    data_path: "{{ env.DOGFOOD_LAKE_DATA }}"
+    storage: {type: local}
+
+  windowed:
+    type: rest
+    spec: apis/windowed.yaml
+    secrets: {api_key: {secret: env:WINDOWED_API_KEY}}
+
+  signed:
+    type: rest
+    spec: apis/signed.yaml
+    secrets:
+      client_id: {secret: env:SIGNED_CLIENT_ID}
+      consumer_key: {secret: env:SIGNED_CONSUMER_KEY}

@@ -1,0 +1,16 @@
+# The phantom dep `au/metric_feed` (the real dbt key is `metric_feed`) is a known defect, kept.
+replications:
+  metric:
+    source: lake
+    target: app_pg
+    asset: {group: metric, description: Syncs metrics from DuckLake to Postgres}
+    streams:
+      - id: load/metric
+        from: {table: au.metric_feed}
+        object: app.metric
+        mode: cdc
+        primary_key: [org_id, instrument_id, series_id, fiscal_year, fiscal_period, periodicity]
+        deletes: {mode: soft, column: deleted_at}
+        columns:
+          periodicity: {target_type: app.periodicity}
+        asset: {key: target/app/metric, deps: [au/metric_feed]}

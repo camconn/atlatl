@@ -1,0 +1,32 @@
+[package]
+name = "atlatl-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+atlatl-core.workspace = true
+base64.workspace = true
+chrono.workspace = true
+csv.workspace = true
+futures.workspace = true
+hmac.workspace = true
+indexmap.workspace = true
+jmespath.workspace = true
+minijinja.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util", "net"] }

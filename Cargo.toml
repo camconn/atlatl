@@ -1,0 +1,111 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+repository = "https://github.com/camconn/atlatl"
+
+[workspace.dependencies]
+atlatl-core = { path = "crates/atlatl-core" }
+atlatl-engine = { path = "crates/atlatl-engine" }
+atlatl-state = { path = "crates/atlatl-state" }
+atlatl-cdc = { path = "crates/atlatl-cdc" }
+atlatl-conn-clickhouse = { path = "crates/atlatl-conn-clickhouse" }
+atlatl-conn-ducklake = { path = "crates/atlatl-conn-ducklake" }
+atlatl-conn-delta = { path = "crates/atlatl-conn-delta" }
+atlatl-conn-files = { path = "crates/atlatl-conn-files" }
+atlatl-conn-postgres = { path = "crates/atlatl-conn-postgres" }
+atlatl-conn-pgrepl = { path = "crates/atlatl-conn-pgrepl" }
+atlatl-conn-redshift = { path = "crates/atlatl-conn-redshift" }
+atlatl-conn-sqlite = { path = "crates/atlatl-conn-sqlite" }
+atlatl-http = { path = "crates/atlatl-http" }
+atlatl-ingest = { path = "crates/atlatl-ingest" }
+atlatl-testkit = { path = "crates/atlatl-testkit" }
+atlatl-run = { path = "crates/atlatl-run" }
+
+anyhow = "1"
+arrow = { version = "58", default-features = false, features = ["prettyprint"] }
+base64 = "0.23"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+csv = "1"
+duckdb = { version = "=1.10506.1", features = ["appender-arrow", "vscalar"] }
+flate2 = "1"
+futures = "0.3"
+globset = "0.4"
+hmac = "0.13"
+httpdate = "1"
+indexmap = { version = "2", features = ["serde"] }
+jmespath = { version = "0.5", features = ["sync"] }
+libc = "0.2"
+# No `tls`: it pins rustls 0.22; `atlatl-conn-sqlite::https` is the connector.
+libsql = { version = "0.10", default-features = false, features = ["remote"] }
+minijinja = { version = "3", features = ["json", "preserve_order", "serde"] }
+percent-encoding = "2"
+proptest = "1"
+rand = "0.10"
+rcgen = "0.14"
+aho-corasick = "1"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# System libsqlite3 (no `bundled`): 06 §6.
+rusqlite = { version = "0.41", default-features = false, features = ["limits"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh-sftp = "3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+saphyr-parser = "0.3"
+schemars = { version = "1.2", features = ["indexmap2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.11"
+tar = "0.4"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "process", "io-util", "fs"] }
+tokio-postgres = "0.7"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+rustls-platform-verifier = "0.7"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+zstd = { version = "0.14", default-features = false }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.dev]
+# Disk is tight on dev hosts; backtraces still show function names.
+debug = false
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test.package."*"]
+debug = false
+
+# The redactor rebuilds its automata as secrets arrive; unoptimised it dominates test time.
+[profile.dev.package.aho-corasick]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+panic = "unwind"
+
+[profile.dist]
+inherits = "release"
+lto = "fat"

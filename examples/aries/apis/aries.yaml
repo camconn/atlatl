@@ -1,0 +1,80 @@
+# Aries (finance.dev) for many members, each with their own personal-token client
+# (`ARI-PERSONAL-TK.*`, client-credentials grant, 15-minute tokens, no refresh token). Aries ignores
+# scopes and any token can trade, so this spec only ever sends GETs.
+name: aries
+base_url: "{{ env.ARIES_BASE_URL or 'https://api.aries.com' }}"
+auth:
+  type: oauth2
+  flow: client_credentials
+  token_url: "{{ (env.ARIES_BASE_URL or 'https://api.aries.com') | safe }}/v1/oauth2/token"
+  client_auth: body                     # HTTP Basic is rejected
+  client_id: "{{ secrets.item.client_id }}"
+  client_secret: "{{ secrets.item.client_secret }}"
+rate_limit: {rps: 2, max_in_flight: 2}
+defaults:
+  headers: {Accept: application/json}
+  rules:
+    - {when: "response.status == 429 or response.status >= 500", action: retry, max_attempts: 5, backoff: {type: exponential, base: 2s}}
+
+endpoints:
+  # One row per trading account (live and SIM), tagged with its member; feeds `accounts`.
+  accounts:
+    for_each:
+      over: {query: "SELECT member, client_id, client_secret FROM members ORDER BY member", connection: seed}
+      as: m
+      secret: [client_id, client_secret]
+    request: {path: /v2/users/me/accounts}
+    records: {path: accounts, primary_key: [trading_account_id]}
+    fields: {member: m.member}
+    emit:
+      accounts: '{"member": m.member, "account_id": record.trading_account_id, "client_id": secrets.item.client_id, "client_secret": secrets.item.client_secret}'
+    history: snapshot_only
+
+  # The rest land raw: one row per response page, `{fetched_at, request_key, status, response_json}`.
+  # `request_key` is the request URL, so it names the account.
+
+  # Every account's full history each run, walked inside pagination: 90-day windows from
+  # `vars.history_start` (`to` omitted, so the server caps each at from+90d), and Aries' cursor
+  # within a window (`nextCursor: 0` ends it). Re-pulling keeps late status changes and new
+  # members simple; the pages are small.
+  orders_history:
+    for_each: {over: {queue: accounts}, as: a, secret: [client_id, client_secret]}
+    request:
+      path: "/v2/accounts/{{ a.account_id }}/orders/history"
+      params:
+        from: "{{ page.win or vars.history_start }}T00:00:00Z"
+        cursor: "{{ page.cur }}"
+        order_by: asc
+        limit: 500
+    paginate:
+      type: expression
+      next:
+        cur: "response.json.nextCursor if response.json.nextCursor != 0 else none"
+        win: 'page.win or vars.history_start if response.json.nextCursor != 0 else date_add(date(page.win or vars.history_start), 90, "day") | date_format("%Y-%m-%d")'
+      stop_when: 'response.json.nextCursor == 0 and date_add(date(page.win or vars.history_start), 90, "day") > now()'
+      stop_on_empty: false
+    raw: true
+    history: snapshot_only
+
+  # Open orders of any age plus today's terminal ones.
+  orders_active:
+    for_each: {over: {queue: accounts}, as: a, secret: [client_id, client_secret]}
+    request:
+      path: "/v2/accounts/{{ a.account_id }}/orders"
+      params: {limit: 500}
+    paginate: {type: cursor, param: cursor, from: nextCursor, stop_when: "response.json.nextCursor == 0"}
+    raw: true
+    history: snapshot_only
+
+  # Today's P&L lives only in these snapshots (REST has no P&L history); run once a day after close.
+  positions:
+    for_each: {over: {queue: accounts}, as: a, secret: [client_id, client_secret]}
+    request: {path: "/v1/accounts/{{ a.account_id }}/positions"}
+    raw: true
+    history: snapshot_only
+
+  balance:
+    for_each: {over: {queue: accounts}, as: a, secret: [client_id, client_secret]}
+    request: {path: "/v2/accounts/{{ a.account_id }}/balance"}
+    raw: true
+    history: snapshot_only

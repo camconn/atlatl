@@ -1,0 +1,33 @@
+[package]
+name = "atlatl-conn-files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+atlatl-core.workspace = true
+atlatl-ingest.workspace = true
+base64.workspace = true
+duckdb.workspace = true
+flate2.workspace = true
+globset.workspace = true
+indexmap.workspace = true
+minijinja.workspace = true
+reqwest.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+tokio.workspace = true
+zip.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+atlatl-testkit.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

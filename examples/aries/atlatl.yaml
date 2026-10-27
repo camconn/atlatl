@@ -1,0 +1,22 @@
+# Investing-club scrape of Aries (finance.dev) accounts into a local DuckLake: every member's raw
+# order history, today's orders, positions and balance, kept exactly as Aries returned them.
+version: 1
+
+state: {lake: lake}
+
+connections:
+  lake:
+    type: ducklake
+    alias: lake
+    catalog: {type: duckdb, path: "{{ env('ARIES_LAKE', project_root ~ '/.lake') }}/meta.ducklake"}
+    data_path: "{{ env('ARIES_LAKE', project_root ~ '/.lake') }}/data/"
+    storage: {type: local}
+
+  # Members and their personal-token clients: `members(member, client_id, client_secret)`.
+  seed:
+    type: duckdb
+    path: "{{ env('ARIES_SEED', project_root ~ '/seed.duckdb') }}"
+
+  aries:
+    type: rest
+    spec: apis/aries.yaml

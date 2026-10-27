@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "api": "signed",
+  "recorded_at": "2026-09-29T17:48:08.625Z",
+  "match": {
+    "ignore_query": [
+      "timestamp"
+    ]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/users/list?clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "35"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[\"dogfood-user-a\",\"dogfood-user-b\"]",
+        "elapsed_ms": 22
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts?userId=dogfood-user-a&userSecret=****&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "743"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"id\":\"acc-a1\",\"brokerage_authorization\":\"auth-dogfood-user-a\",\"portfolio_group\":\"pg-acc-a1\",\"name\":\"Broker One Individual\",\"number\":\"NO-acc-a1\",\"institution_name\":\"Broker One\",\"created_date\":\"2025-01-15T18:04:11.123Z\",\"balance\":{\"total\":{\"amount\":15363.23,\"currency\":\"USD\"}},\"meta\":{\"type\":\"INDIVIDUAL\",\"status\":\"ACTIVE\",\"institution_name\":\"Broker One\"},\"is_paper\":false},{\"id\":\"acc-a2\",\"brokerage_authorization\":\"auth-dogfood-user-a\",\"portfolio_group\":\"pg-acc-a2\",\"name\":\"Broker Two Savings\",\"number\":\"NO-acc-a2\",\"institution_name\":\"Broker Two\",\"created_date\":\"2025-01-15T18:04:11.123Z\",\"balance\":{\"total\":{\"amount\":8120.50,\"currency\":\"CAD\"}},\"meta\":{\"type\":\"INDIVIDUAL\",\"status\":\"ACTIVE\",\"institution_name\":\"Broker Two\"},\"is_paper\":false}]",
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts?userId=dogfood-user-b&userSecret=****&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "377"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"id\":\"acc-b1\",\"brokerage_authorization\":\"auth-dogfood-user-b\",\"portfolio_group\":\"pg-acc-b1\",\"name\":\"Broker Three Personal\",\"number\":\"NO-acc-b1\",\"institution_name\":\"Broker Three\",\"created_date\":\"2025-01-15T18:04:11.123Z\",\"balance\":{\"total\":{\"amount\":3412.00,\"currency\":\"CAD\"}},\"meta\":{\"type\":\"INDIVIDUAL\",\"status\":\"ACTIVE\",\"institution_name\":\"Broker Three\"},\"is_paper\":false}]",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a1/positions?userId=dogfood-user-a&userSecret=****&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "948"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"symbol\":{\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"Acme Corp\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":{\"code\":\"cs\",\"description\":\"Common Stock\"}},\"id\":\"usym-ACME\",\"description\":\"Acme Corp\",\"is_quotable\":true,\"is_tradable\":true},\"units\":10,\"price\":227.52,\"open_pnl\":474.20,\"fractional_units\":null,\"average_purchase_price\":180.10,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"cash_equivalent\":false},{\"symbol\":{\"symbol\":{\"id\":\"sym-IDXT\",\"symbol\":\"IDXT\",\"raw_symbol\":\"IDXT\",\"description\":\"Total Market Fund\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":{\"code\":\"cs\",\"description\":\"Common Stock\"}},\"id\":\"usym-IDXT\",\"description\":\"Total Market Fund\",\"is_quotable\":true,\"is_tradable\":true},\"units\":3.5,\"price\":285.40,\"open_pnl\":123.90,\"fractional_units\":null,\"average_purchase_price\":250.00,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"cash_equivalent\":false}]",
+        "elapsed_ms": 7
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a2/positions?userId=dogfood-user-a&userSecret=****&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "487"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"symbol\":{\"symbol\":{\"id\":\"sym-MAPL.XB\",\"symbol\":\"MAPL.XB\",\"raw_symbol\":\"MAPL.XB\",\"description\":\"Maple Commerce\",\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"},\"type\":{\"code\":\"cs\",\"description\":\"Common Stock\"}},\"id\":\"usym-MAPL.XB\",\"description\":\"Maple Commerce\",\"is_quotable\":true,\"is_tradable\":true},\"units\":20,\"price\":112.30,\"open_pnl\":271.00,\"fractional_units\":null,\"average_purchase_price\":98.75,\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"},\"cash_equivalent\":false}]",
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-b1/positions?userId=dogfood-user-b&userSecret=****&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "491"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "[{\"symbol\":{\"symbol\":{\"id\":\"sym-EQTY.XB\",\"symbol\":\"EQTY.XB\",\"raw_symbol\":\"EQTY.XB\",\"description\":\"Core Equity Fund\",\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"},\"type\":{\"code\":\"cs\",\"description\":\"Common Stock\"}},\"id\":\"usym-EQTY.XB\",\"description\":\"Core Equity Fund\",\"is_quotable\":true,\"is_tradable\":true},\"units\":100,\"price\":34.12,\"open_pnl\":362.00,\"fractional_units\":null,\"average_purchase_price\":30.50,\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"},\"cash_equivalent\":false}]",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a1/activities?userId=dogfood-user-a&userSecret=****&startDate=2026-09-01&endDate=2026-09-28&offset=0&limit=2&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "1074"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"id\":\"act-a1-1\",\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"ACME dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":227.52,\"units\":2,\"amount\":-455.04,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"BUY\",\"option_type\":\"\",\"description\":\"BUY dogfood\",\"trade_date\":\"2026-09-02T14:30:00Z\",\"settlement_date\":\"2026-09-02T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-1\"},{\"id\":\"act-a1-2\",\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"ACME dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":0,\"units\":0,\"amount\":2.60,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"DIVIDEND\",\"option_type\":\"\",\"description\":\"DIVIDEND dogfood\",\"trade_date\":\"2026-09-12T00:00:00Z\",\"settlement_date\":\"2026-09-12T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-2\"}],\"pagination\":{\"offset\":0,\"limit\":2,\"total\":4}}",
+        "elapsed_ms": 12
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a1/activities?userId=dogfood-user-a&userSecret=****&startDate=2026-09-01&endDate=2026-09-28&offset=2&limit=2&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "1076"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"id\":\"act-a1-3\",\"symbol\":{\"id\":\"sym-IDXT\",\"symbol\":\"IDXT\",\"raw_symbol\":\"IDXT\",\"description\":\"IDXT dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":285.40,\"units\":1.5,\"amount\":-428.10,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"BUY\",\"option_type\":\"\",\"description\":\"BUY dogfood\",\"trade_date\":\"2026-09-15T15:05:00Z\",\"settlement_date\":\"2026-09-15T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-3\"},{\"id\":\"act-a1-4\",\"symbol\":{\"id\":\"sym-ACME\",\"symbol\":\"ACME\",\"raw_symbol\":\"ACME\",\"description\":\"ACME dogfood\",\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"}},\"option_symbol\":null,\"price\":231.10,\"units\":-1,\"amount\":231.10,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"SELL\",\"option_type\":\"\",\"description\":\"SELL dogfood\",\"trade_date\":\"2026-09-22T14:30:00Z\",\"settlement_date\":\"2026-09-22T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker One\",\"external_reference_id\":\"ext-act-a1-4\"}],\"pagination\":{\"offset\":2,\"limit\":2,\"total\":4}}",
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-a2/activities?userId=dogfood-user-a&userSecret=****&startDate=2026-09-01&endDate=2026-09-28&offset=0&limit=2&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "965"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"id\":\"act-a2-1\",\"symbol\":null,\"option_symbol\":null,\"price\":0,\"units\":0,\"amount\":1000.00,\"currency\":{\"id\":\"ccy-USD\",\"code\":\"USD\",\"name\":\"USD\"},\"type\":\"CONTRIBUTION\",\"option_type\":\"\",\"description\":\"CONTRIBUTION dogfood\",\"trade_date\":\"2026-09-05T00:00:00Z\",\"settlement_date\":\"2026-09-05T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker Two\",\"external_reference_id\":\"ext-act-a2-1\"},{\"id\":\"act-a2-2\",\"symbol\":{\"id\":\"sym-MAPL.XB\",\"symbol\":\"MAPL.XB\",\"raw_symbol\":\"MAPL.XB\",\"description\":\"MAPL.XB dogfood\",\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"}},\"option_symbol\":null,\"price\":110.05,\"units\":5,\"amount\":-550.25,\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"},\"type\":\"BUY\",\"option_type\":\"\",\"description\":\"BUY dogfood\",\"trade_date\":\"2026-09-08T13:45:00Z\",\"settlement_date\":\"2026-09-08T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker Two\",\"external_reference_id\":\"ext-act-a2-2\"}],\"pagination\":{\"offset\":0,\"limit\":2,\"total\":2}}",
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.signed.example/api/v1/accounts/acc-b1/activities?userId=dogfood-user-b&userSecret=****&startDate=2026-09-01&endDate=2026-09-28&offset=0&limit=2&clientId=****&timestamp=1790704088",
+        "headers": [
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "578"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":[{\"id\":\"act-b1-1\",\"symbol\":{\"id\":\"sym-EQTY.XB\",\"symbol\":\"EQTY.XB\",\"raw_symbol\":\"EQTY.XB\",\"description\":\"EQTY.XB dogfood\",\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"}},\"option_symbol\":null,\"price\":33.90,\"units\":10,\"amount\":-339.00,\"currency\":{\"id\":\"ccy-CAD\",\"code\":\"CAD\",\"name\":\"CAD\"},\"type\":\"BUY\",\"option_type\":\"\",\"description\":\"BUY dogfood\",\"trade_date\":\"2026-09-18T16:00:00Z\",\"settlement_date\":\"2026-09-18T00:00:00Z\",\"fee\":0.00,\"fx_rate\":null,\"institution\":\"Broker Three\",\"external_reference_id\":\"ext-act-b1-1\"}],\"pagination\":{\"offset\":0,\"limit\":2,\"total\":1}}",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

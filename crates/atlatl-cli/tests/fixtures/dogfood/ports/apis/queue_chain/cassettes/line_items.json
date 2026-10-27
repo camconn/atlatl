@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "api": "queue_chain",
+  "recorded_at": "2026-09-29T17:56:05.944Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/reports/rep_11/line_items?api_key=****"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "308"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"line_items\":[{\"tag\":{\"name\":\"revenue\"},\"value\":1000.5},{\"tag\":{\"name\":\"net_income\"},\"value\":120.25}],\"report\":{\"id\":\"rep_11\",\"entity\":{\"id\":\"ent_1\",\"reg_no\":\"0000001\",\"code\":\"ACME\"},\"year\":2013,\"period\":\"FY\",\"start_date\":\"2013-01-01\",\"end_date\":\"2013-12-31\",\"filed_date\":\"2014-02-15\",\"kind_code\":\"income\"}}",
+        "elapsed_ms": 14
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.queue-chain.example/api/reports/rep_31/line_items?api_key=****"
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "21"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"error\":\"not found\"}",
+        "elapsed_ms": 5
+      }
+    }
+  ]
+}

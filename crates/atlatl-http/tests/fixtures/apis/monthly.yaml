@@ -1,0 +1,20 @@
+name: monthly
+base_url: https://api.monthly.example/api
+rate_limit: {rps: 2}
+defaults:
+  headers:
+    User-Agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    Accept: application/json
+endpoints:
+  calendar:
+    for_each:
+      over: 'range(coalesce(sync.floor, date("1996-01-01")), date_add(now(), 1, "month"), "1mo")'
+      as: window_start
+    request:
+      path: /listings/calendar
+      params: {month: '{{ window_start | date_format("%Y-%m") }}'}
+    records:
+      path: "[ data.open.rows[].merge(@, {category: 'open'}), data.closed.rows[].merge(@, {category: 'closed'}), data.cancelled.rows[].merge(@, {category: 'cancelled'}) ][]"
+      primary_key: [dealId, category]
+    sync:
+      floor: {value: 'date_trunc(date_add(now(), -2, "month"), "month")', aggregate: set}

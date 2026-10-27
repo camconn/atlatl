@@ -1,0 +1,9 @@
+schema:
+  fields:
+    code: {type: string, nullable: false}
+    uid: {type: string, nullable: false}
+    name: {type: string}
+    currency: {type: string, values: [USD]}
+    venue: {type: string, values: [XA, XB]}
+    country: {type: string}
+    type: {type: string, values: [Common]}

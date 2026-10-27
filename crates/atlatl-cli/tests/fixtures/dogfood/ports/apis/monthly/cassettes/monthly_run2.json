@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "api": "monthly",
+  "recorded_at": "2026-09-29T17:56:29.096Z",
+  "match": {},
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-07",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 16
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-08",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-09",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "603"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":[{\"dealId\":\"D199\",\"proposedSymbol\":\"DYNE\",\"orgName\":\"DYNE Holdings\",\"proposedVenue\":\"XA\",\"proposedPrice\":\"$14.00\",\"unitsOffered\":\"500,000\",\"openedDate\":\"09/01/2026\",\"filedDate\":\"09/01/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Open\"},{\"dealId\":\"D200\",\"proposedSymbol\":\"EMBR\",\"orgName\":\"EMBR Holdings\",\"proposedVenue\":\"XA\",\"proposedPrice\":\"$9.00\",\"unitsOffered\":\"3,000,000\",\"openedDate\":null,\"filedDate\":\"09/01/2026\",\"cancelledDate\":null,\"dollarValue\":\"$15,000,000\",\"dealStatus\":\"Open\"}]},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 7
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.monthly.example/api/listings/calendar?month=2026-10",
+        "headers": [
+          [
+            "user-agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          ],
+          [
+            "accept",
+            "application/json"
+          ]
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "content-type",
+            "application/json"
+          ],
+          [
+            "content-length",
+            "95"
+          ],
+          [
+            "connection",
+            "close"
+          ]
+        ],
+        "body": "{\"data\":{\"open\":{\"rows\":null},\"closed\":{\"rows\":null},\"cancelled\":{\"rows\":null}},\"message\":null}",
+        "elapsed_ms": 6
+      }
+    }
+  ]
+}

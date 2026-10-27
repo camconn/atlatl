@@ -1,0 +1,13 @@
+replications:
+  aries:
+    source: aries
+    target: lake
+    defaults:
+      mode: incremental                 # no primary key: raw rows append, nothing is overwritten
+      vars: {history_start: "2025-01-01"}
+    streams:
+      - {id: aries/accounts, from: {endpoint: accounts}, object: br.aries_accounts, primary_key: [trading_account_id]}
+      - {id: aries/orders_history, from: {endpoint: orders_history}, object: br.aries_orders_history_raw}
+      - {id: aries/orders_active, from: {endpoint: orders_active}, object: br.aries_orders_active_raw}
+      - {id: aries/positions, from: {endpoint: positions}, object: br.aries_positions_raw}
+      - {id: aries/balance, from: {endpoint: balance}, object: br.aries_balance_raw}

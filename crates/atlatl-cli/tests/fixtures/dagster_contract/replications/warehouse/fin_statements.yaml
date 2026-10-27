@@ -1,0 +1,19 @@
+replications:
+  warehouse_fin_statements:
+    source: warehouse
+    target: lake
+    op: warehouse_fin_statements
+    lock_group: warehouse
+    asset: {group: warehouse, description: "Syncs warehouse reported statements (fin_core / fin_plus) from the warehouse"}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: warehouse/fin_v1/fin_core
+        from: {tables: "fin_v1.fin_core_*"}
+        primary_key: [sym_id, date]
+        asset: {key: br/warehouse/fin_v1/fin_core, deps: [fin_v1/fin_core__]}
+      - id: warehouse/fin_v1/fin_plus
+        from: {tables: "fin_v1.fin_plus_*"}
+        primary_key: [sym_id, date]
+        asset: {key: br/warehouse/fin_v1/fin_plus, deps: [fin_v1/fin_plus__]}

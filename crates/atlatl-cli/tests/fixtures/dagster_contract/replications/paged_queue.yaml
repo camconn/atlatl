@@ -1,0 +1,19 @@
+# Keys are the legacy integration's defaults (no key template); dbt's sources point at br/paged_queue/*, a known defect.
+replications:
+  paged_queue:
+    source: paged_queue
+    target: lake
+    asset: {group: paged_queue_orgs, description: Syncs organisations and their rounds}
+    defaults:
+      mode: full-refresh
+    streams:
+      - id: paged_queue/orgs
+        from: {endpoint: orgs}
+        object: br.orgs
+        primary_key: [orgId]
+        asset: {key: target/br/orgs, deps: [orgs]}
+      - id: paged_queue/rounds
+        from: {endpoint: rounds}
+        object: br.rounds
+        primary_key: [id]
+        asset: {key: target/br/rounds, deps: [rounds]}

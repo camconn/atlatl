@@ -1,0 +1,10 @@
+schema:
+  fields:
+    id: {type: string, nullable: false}
+    orgId: {type: string, nullable: false}
+    roundType: {type: string, values: [Seed, Series A, Series B, Series C]}
+    announcedDate: {type: date}
+    amountRaised: {type: decimal}
+    preMoney: {type: decimal}
+    investors: {type: json}
+  on_null_violation: warn

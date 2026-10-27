@@ -1,0 +1,62 @@
+# M8.4a: FRED CSVs as bulk files, like `queue_chain_bulk`. The tables keep what the previous
+# loader made of them: its header cleaning (`clean_csv`), all-text columns, and its
+# `_legacy_loaded_at` epoch column. Missing observations become NULL: FRED's graph CSV leaves the
+# field empty, the archives (built from FRED API exports) use ".".
+replications:
+  bulk_dgs10:
+    source: fred_files
+    target: lake
+    op: bulk
+    streams:
+      - id: bulk/dgs10
+        mode: full-refresh
+        from:
+          files:
+            url: "{{ env('FRED_GRAPH', 'https://fred.stlouisfed.org/graph') }}/fredgraph.csv?id=DGS10&cosd=2025-07-01"
+            format: csv
+            csv: {header: true, null_values: [""]}
+        object: br.bulk_dgs10
+        primary_key: [observation_date]
+        naming: clean_csv
+        columns: {"*": {type: text}}
+        metadata: {loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}
+
+  # A zip in object storage: the data member, and a series dictionary that is never read.
+  bulk_rates:
+    source: fred_s3
+    target: lake
+    op: bulk
+    streams:
+      - id: bulk/rates
+        mode: full-refresh
+        from:
+          files:
+            url: "s3://{{ env('FRED_BUCKET', 'fred') }}/bulk/FRED_RATES.zip"
+            archive: {member: FRED_RATES.csv}
+            format: csv
+            csv: {header: true, null_values: ["."]}
+        object: br.bulk_rates
+        primary_key: [observation_date]
+        naming: clean_csv
+        columns: {"*": {type: text}}
+        metadata: {loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}
+
+  # A delivered tarball on local disk: one member of several.
+  bulk_gdp:
+    source: fred_files
+    target: lake
+    op: bulk
+    streams:
+      - id: bulk/gdp
+        mode: full-refresh
+        from:
+          files:
+            url: "file://{{ env('FRED_BULK_DIR', project_root ~ '/.bulk') }}/FRED_GDP.tar.gz"
+            archive: {member: fred/GDPC1.csv}
+            format: csv
+            csv: {header: true, null_values: ["."]}
+        object: br.bulk_gdp
+        primary_key: [observation_date]
+        naming: clean_csv
+        columns: {"*": {type: text}}
+        metadata: {loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}

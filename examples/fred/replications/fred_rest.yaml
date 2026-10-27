@@ -1,0 +1,31 @@
+# M8.1a: REST ports of the keyless FRED graph CSV.
+replications:
+  fred_dff:
+    source: fred
+    target: lake
+    streams:
+      - id: fred/dff
+        from: {endpoint: dff}
+        object: br.fred_dff
+        mode: incremental
+        primary_key: [observation_date]
+
+  fred_dff_daily:
+    source: fred
+    target: lake
+    streams:
+      - id: fred/dff_windows
+        from: {endpoint: dff_windows}
+        object: br.fred_dff_daily
+        mode: incremental
+        primary_key: [observation_date]
+
+  fred_series:
+    source: fred
+    target: lake
+    streams:
+      - id: fred/series
+        from: {endpoint: series}
+        object: br.fred_observations
+        mode: incremental
+        primary_key: [series_id, observation_date]

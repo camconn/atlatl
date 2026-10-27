@@ -1,0 +1,43 @@
+replications:
+  warehouse_reference:
+    source: warehouse
+    target: lake
+    op: warehouse_reference
+    lock_group: warehouse
+    asset: {group: warehouse, description: "Syncs warehouse per-symbol reference and mapping tables (fin_sym / est_sym) from the warehouse"}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: warehouse/fin_v1/fin_sym_coverage
+        from: {table: fin_v1.fin_sym_coverage}
+        primary_key: [sym_id]
+        asset: {key: br/warehouse/fin_v1/fin_sym_coverage, deps: [fin_v1/fin_sym_coverage]}
+      - id: warehouse/fin_v1/fin_sym_map
+        from: {table: fin_v1.fin_sym_map}
+        primary_key: [sym_id]
+        asset: {key: br/warehouse/fin_v1/fin_sym_map, deps: [fin_v1/fin_sym_map]}
+      - id: warehouse/fin_v1/fin_sym_entity
+        from: {table: fin_v1.fin_sym_entity}
+        primary_key: [sym_id]
+        asset: {key: br/warehouse/fin_v1/fin_sym_entity, deps: [fin_v1/fin_sym_entity]}
+      - id: warehouse/fin_v1/fin_sym_entity_hist
+        from: {table: fin_v1.fin_sym_entity_hist}
+        primary_key: [sym_id, start_date]
+        asset: {key: br/warehouse/fin_v1/fin_sym_entity_hist, deps: [fin_v1/fin_sym_entity_hist]}
+      - id: warehouse/est_v2/est_sym_coverage
+        from: {table: est_v2.est_sym_coverage}
+        primary_key: [sym_id]
+        asset: {key: br/warehouse/est_v2/est_sym_coverage, deps: [est_v2/est_sym_coverage]}
+      - id: warehouse/est_v2/est_sym_map
+        from: {table: est_v2.est_sym_map}
+        primary_key: [sym_id]
+        asset: {key: br/warehouse/est_v2/est_sym_map, deps: [est_v2/est_sym_map]}
+      - id: warehouse/est_v2/est_sym_entity
+        from: {table: est_v2.est_sym_entity}
+        primary_key: [sym_id]
+        asset: {key: br/warehouse/est_v2/est_sym_entity, deps: [est_v2/est_sym_entity]}
+      - id: warehouse/est_v2/est_sym_entity_hist
+        from: {table: est_v2.est_sym_entity_hist}
+        primary_key: [sym_id, start_date]
+        asset: {key: br/warehouse/est_v2/est_sym_entity_hist, deps: [est_v2/est_sym_entity_hist]}

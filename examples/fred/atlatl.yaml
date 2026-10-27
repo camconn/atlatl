@@ -1,0 +1,85 @@
+# Public-data analogues of the consumer ports (spec 13 §2): FRED series moved port -> parity ->
+# cut-over. Every endpoint besides FRED itself is local; the defaults run from a checkout.
+version: 1
+
+environments:
+  names: [dev, parity]
+  default: dev
+  base: dev
+  parity:
+    # A parity run writes a scratch lake; sources are shared.
+    allow_base: [fred, fred_files, fred_s3, appdb, warehouse]
+
+engine: {memory: 1GB, threads: 2}
+
+state: {lake: lake}
+
+connections:
+  lake:
+    type: ducklake
+    alias: lake
+    catalog: {type: duckdb, path: "{{ env('FRED_LAKE', project_root ~ '/.lake') }}/meta.ducklake"}
+    data_path: "{{ env('FRED_LAKE', project_root ~ '/.lake') }}/data/"
+    storage: {type: local}
+    environments:
+      parity:
+        catalog: {path: "{{ env('FRED_PARITY_LAKE', project_root ~ '/.lake-parity') }}/meta.ducklake"}
+        data_path: "{{ env('FRED_PARITY_LAKE', project_root ~ '/.lake-parity') }}/data/"
+
+  fred:
+    type: rest
+    spec: apis/fred.yaml
+
+  # M8.2a: the app database (a local Postgres seeded with FRED data by the tests).
+  appdb:
+    type: postgres
+    host: "{{ env('FRED_PG_HOST', 'localhost') }}"
+    port: 5432                        # the tests rewrite this line
+    database: "{{ env('FRED_PG_DATABASE', 'fred_app') }}"
+    user: "{{ env('FRED_PG_USER', 'postgres') }}"
+    password: {secret: env:FRED_PG_PASSWORD}
+    sslmode: disable
+    read_only: true
+
+  # M8.3a: the warehouse (the Redshift Data API fake in the tests) with UNLOAD to local S3.
+  warehouse:
+    type: redshift
+    read_only: true
+    data_api:
+      workgroup: fred-workgroup
+      database: fred_dw
+      region: us-east-1
+      endpoint: "{{ env('FRED_RS_ENDPOINT', 'http://127.0.0.1:9') }}"
+      key_id: {secret: env:FRED_RS_KEY}
+      secret: {secret: env:FRED_RS_SECRET}
+      poll: {wait: 0s, initial: 5ms, max: 20ms}
+    unload:
+      bucket: "{{ env('FRED_BUCKET', 'fred') }}"
+      prefix: atlatl_unload/
+      iam_role: arn:aws:iam::000000000000:role/fred-unload
+      read_role: none
+      storage:
+        type: s3
+        region: us-east-1
+        endpoint: "{{ env('FRED_S3_ENDPOINT', 'http://127.0.0.1:9000') }}"
+        url_style: path
+        key_id: {secret: env:FRED_S3_KEY}
+        secret: {secret: env:FRED_S3_SECRET}
+
+  # M8.4a: bulk files over HTTPS or on local disk, and archives in local S3 (RustFS).
+  fred_files:
+    type: files
+    read_only: true
+    # FRED's CDN stalls downloads from User-Agents it doesn't know (see apis/fred.yaml).
+    headers: {User-Agent: "curl/8.15.0 (compatible; atlatl-examples)"}
+  fred_s3:
+    type: files
+    read_only: true
+    storage:
+      type: s3
+      provider: config
+      region: us-east-1
+      endpoint: "{{ env('FRED_S3_ENDPOINT', 'http://127.0.0.1:9000') }}"
+      url_style: path
+      key_id: {secret: env:FRED_S3_KEY}
+      secret: {secret: env:FRED_S3_SECRET}

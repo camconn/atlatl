@@ -1,0 +1,48 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "dagster-atlatl"
+description = "Dagster integration for atlatl: bundles the atlatl binary and its DuckDB extensions"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = ["dagster>=1.13,<1.14"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "pyright>=1.1.380"]
+
+[tool.maturin]
+# The wheel ships the `atlatl` binary as a script, not a Python extension module.
+bindings = "bin"
+manifest-path = "../../crates/atlatl-cli/Cargo.toml"
+python-source = "src"
+module-name = "dagster_atlatl"
+# Release builds stage DuckDB extensions under atlatl.data/data/share/atlatl/extensions, which
+# installs to <prefix>/share/atlatl/extensions next to <prefix>/bin/atlatl.
+data = "atlatl.data"
+strip = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PT"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

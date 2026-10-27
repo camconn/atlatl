@@ -1,0 +1,32 @@
+# Reported financials: wide wildcards (period variants), daily full merge plus an hourly window.
+replications:
+  acme_financials:
+    source: warehouse
+    target: lake
+    op: acme_financials
+    lock_group: acme
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: acme/fund/fund_basic
+        from: {tables: "fund.fund_basic_*", exclude: ["fund.*_tmp"]}
+        primary_key: [sec_id, period_end]
+      - {id: acme/fund/fund_adv, from: {tables: "fund.fund_adv_*"}, primary_key: [sec_id, period_end]}
+
+  acme_hourly_financials:
+    source: warehouse
+    target: lake
+    op: acme_financials
+    lock_group: acme
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+      window: "period_end >= current_date - 120"
+    streams:
+      - id: acme_hourly/fund/fund_basic
+        from: {tables: "fund.fund_basic_*", exclude: ["fund.*_tmp"]}
+        primary_key: [sec_id, period_end]
+      - {id: acme_hourly/fund/fund_adv, from: {tables: "fund.fund_adv_*"}, primary_key: [sec_id, period_end]}

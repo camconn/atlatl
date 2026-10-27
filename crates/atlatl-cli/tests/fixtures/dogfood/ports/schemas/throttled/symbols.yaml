@@ -1,0 +1,6 @@
+schema:
+  fields:
+    Code: {type: string, nullable: false}
+    Name: {type: string}
+    Region: {type: string, values: [North, South]}
+    Isin: {type: string}

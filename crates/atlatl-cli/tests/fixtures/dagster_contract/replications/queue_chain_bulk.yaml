@@ -1,0 +1,86 @@
+# Loaded by a Python asset (09 §2) after it downloads the bulk zips into `bulk_dir`.
+replications:
+  queue_chain_bulk:
+    source: bulk_files
+    target: lake
+    op: bulk_load
+    asset: {group: queue_chain}
+    defaults:
+      mode: full-refresh
+      vars: {bulk_dir: "{{ env('BULK_FILES_DIR', '/tmp/bulk_files') }}"}
+      naming: clean_csv
+      columns: {"*": {type: text}}
+      metadata: {loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}
+    streams:
+      - id: queue_chain/std_balance
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/STD_BALANCE.zip"
+            archive: {member: STD_BALANCE.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.std_balance
+        asset: {key: br/queue_chain/std_balance, deps: [file_tmp_bulk_files_std_balance/csv]}
+      - id: queue_chain/ind_balance
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/IND_BALANCE.zip"
+            archive: {member: IND_BALANCE.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.ind_balance
+        asset: {key: br/queue_chain/ind_balance, deps: [file_tmp_bulk_files_ind_balance/csv]}
+      - id: queue_chain/std_metrics
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/STD_METRICS.zip"
+            archive: {member: STD_METRICS.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.std_metrics
+        asset: {key: br/queue_chain/std_metrics, deps: [file_tmp_bulk_files_std_metrics/csv]}
+      - id: queue_chain/ind_metrics
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/IND_METRICS.zip"
+            archive: {member: IND_METRICS.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.ind_metrics
+        asset: {key: br/queue_chain/ind_metrics, deps: [file_tmp_bulk_files_ind_metrics/csv]}
+      - id: queue_chain/std_cashflow
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/STD_CASHFLOW.zip"
+            archive: {member: STD_CASHFLOW.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.std_cashflow
+        asset: {key: br/queue_chain/std_cashflow, deps: [file_tmp_bulk_files_std_cashflow/csv]}
+      - id: queue_chain/ind_cashflow
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/IND_CASHFLOW.zip"
+            archive: {member: IND_CASHFLOW.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.ind_cashflow
+        asset: {key: br/queue_chain/ind_cashflow, deps: [file_tmp_bulk_files_ind_cashflow/csv]}
+      - id: queue_chain/std_income
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/STD_INCOME.zip"
+            archive: {member: STD_INCOME.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.std_income
+        asset: {key: br/queue_chain/std_income, deps: [file_tmp_bulk_files_std_income/csv]}
+      - id: queue_chain/ind_income
+        from:
+          files:
+            url: "file://{{ vars.bulk_dir }}/IND_INCOME.zip"
+            archive: {member: IND_INCOME.csv}
+            format: csv
+            csv: {header: true, null_values: ["NULL"]}
+        object: br.ind_income
+        asset: {key: br/queue_chain/ind_income, deps: [file_tmp_bulk_files_ind_income/csv]}

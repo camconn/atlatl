@@ -1,0 +1,71 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "dbt-atlatl"
+description = "dbt-duckdb plugin that runs atlatl before dbt opens its database; bundles the atlatl binary and its DuckDB extensions"
+readme = "README.md"
+authors = [{ name = "Cameron Conn", email = "cam@camconn.cc" }]
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE.md"]
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = ["dbt-duckdb>=1.9,<1.12", "pyyaml>=6"]
+keywords = ["dbt", "dbt-duckdb", "duckdb", "elt", "ingestion", "rest-api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+[project.urls]
+Homepage = "https://github.com/camconn/atlatl"
+Documentation = "https://github.com/camconn/atlatl/blob/master/spec/13-dbt.md"
+Repository = "https://github.com/camconn/atlatl"
+Issues = "https://github.com/camconn/atlatl/issues"
+
+[dependency-groups]
+# Pinned to the consumer's lock, as python/dbt-compat is.
+dev = [
+    "dbt-core==1.11.12",
+    "dbt-duckdb==1.11.0",
+    "duckdb==1.5.6",
+    "pytest>=8",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "types-pyyaml>=6",
+]
+
+[tool.maturin]
+# As dagster-atlatl: the wheel ships the `atlatl` binary as a script, and release builds stage
+# libduckdb and the DuckDB extensions under atlatl.data/data (scripts/stage-wheel-data.sh).
+bindings = "bin"
+manifest-path = "../../crates/atlatl-cli/Cargo.toml"
+python-source = "src"
+module-name = "dbt_atlatl"
+data = "atlatl.data"
+strip = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PT"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

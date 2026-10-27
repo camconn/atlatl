@@ -1,0 +1,19 @@
+replications:
+  warehouse_est_actuals:
+    source: warehouse
+    target: lake
+    op: warehouse_est_actuals
+    lock_group: warehouse
+    asset: {group: warehouse, description: "Syncs warehouse estimate actuals (est_core_act / est_plus_act) from the warehouse"}
+    defaults:
+      mode: incremental
+      object: "br.{{ member.table }}"
+    streams:
+      - id: warehouse/est_v2/est_core_act
+        from: {tables: "est_v2.est_core_act_*"}
+        primary_key: [sym_id, item_code, period_end]
+        asset: {key: br/warehouse/est_v2/est_core_act, deps: [est_v2/est_core_act__]}
+      - id: warehouse/est_v2/est_plus_act
+        from: {tables: "est_v2.est_plus_act_*"}
+        primary_key: [sym_id, item_code, period_end]
+        asset: {key: br/warehouse/est_v2/est_plus_act, deps: [est_v2/est_plus_act__]}

@@ -1,0 +1,18 @@
+# M8.2a: the app database into the lake, like `appdb`: the series catalogue plus the observation
+# tables found by a wildcard (sorted byte-wise; views are skipped), each a full refresh by key
+# that mirrors an emptied source table.
+replications:
+  appdb:
+    source: appdb
+    target: lake
+    defaults:
+      mode: full-refresh
+      on_empty: mirror
+      object: "br.appdb_{{ member.table }}"
+    streams:
+      - id: appdb/series
+        from: {table: fred.series}
+        primary_key: [series_id]
+      - id: appdb/observations
+        from: {tables: "fred.obs_*"}
+        primary_key: [series_id, observation_date]

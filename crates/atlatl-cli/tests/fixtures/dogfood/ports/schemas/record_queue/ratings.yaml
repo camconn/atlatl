@@ -1,0 +1,17 @@
+# Reviewed: `author` is often blank; a blank `rating_prior` and a 0 `target_prior` mean "none".
+schema:
+  fields:
+    date: {type: date, nullable: false}
+    source_name: {type: string, nullable: false}
+    author: {type: string}
+    action: {type: string, values: [initiate, upgrade, downgrade, maintain, reiterate]}
+    rating_current: {type: string}
+    rating_prior: {type: string}
+    target_current: {type: decimal}
+    target_prior: {type: decimal}
+    uid: {type: string, nullable: false}
+    code: {type: string, nullable: false}
+    instrument_name: {type: string}
+    currency: {type: string}
+    venue: {type: string}
+    venue_timezone: {type: string}

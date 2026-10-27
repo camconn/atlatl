@@ -87,6 +87,29 @@ async fn same_rows(env: &Env) {
 }
 
 /// With `logical_decoding_work_mem = 64kB`, these transactions arrive as stream blocks.
+/// An open transaction's WAL is only written when a page fills or something flushes it, and the
+/// window's head is `pg_current_wal_lsn()` (the write position): commit a transaction that writes
+/// WAL elsewhere (a commit only flushes then; temp-table catalog changes aren't decoded), which
+/// flushes everything before its commit record, so the window sees what `open` inserted.
+async fn written_past_inserts(env: &Env, open: &tokio_postgres::Client) {
+    let inserted: String = open
+        .query_one("SELECT pg_current_wal_insert_lsn()::text", &[])
+        .await
+        .expect("insert lsn")
+        .get(0);
+    env.exec("CREATE TEMP TABLE wal_flush (); DROP TABLE wal_flush")
+        .await;
+    let done: bool = open
+        .query_one(
+            "SELECT pg_current_wal_lsn() >= $1::text::pg_lsn",
+            &[&inserted],
+        )
+        .await
+        .expect("write lsn")
+        .get(0);
+    assert!(done, "WAL not written past {inserted}");
+}
+
 async fn streamed_transactions(v: u32) {
     let env = Env::new(v).await;
     env.exec("CREATE TABLE s (id int PRIMARY KEY, v text); INSERT INTO s VALUES (0, 'orig');")
@@ -148,6 +171,7 @@ async fn streamed_transactions(v: u32) {
         )
         .await
         .expect("open");
+    written_past_inserts(&env, other.client()).await;
     let r = env.run(spec.clone()).await;
     assert!(
         r.applied.window.changes > 1000,

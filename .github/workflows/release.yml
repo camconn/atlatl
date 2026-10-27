@@ -348,6 +348,8 @@ jobs:
     needs: [prepare, checksums]
     if: needs.prepare.outputs.crates == 'true'
     runs-on: ubuntu-latest
+    # crates.io takes a burst of about five new crates, then about one every ten minutes.
+    timeout-minutes: 300
     environment: crates-io
     permissions:
       contents: read
@@ -366,7 +368,10 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
         if: env.CRATES_IO_TOKEN == ''
+      # One crate at a time in dependency order: skips versions already published (so a rerun
+      # resumes) and waits out crates.io's rate limit. The trusted-publishing token lasts about
+      # 30 minutes, too short for the waits of a first release; that one uses CRATES_IO_TOKEN.
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || env.CRATES_IO_TOKEN }}
-        run: cargo publish --workspace --exclude atlatl-testkit --locked
+        run: python3 scripts/publish-crates.py

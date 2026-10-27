@@ -36,7 +36,11 @@ pub struct Detected {
 impl Detected {
     pub fn detect() -> Self {
         let host = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
-        Self::from_root(Path::new("/"), host)
+        let mut d = Self::from_root(Path::new("/"), host);
+        if d.memory.is_none() {
+            d.memory = os_memory();
+        }
+        d
     }
 
     /// Reads `<root>/proc/self/cgroup`, `<root>/proc/meminfo` and `<root>/sys/fs/cgroup/…`.
@@ -117,6 +121,29 @@ impl Detected {
             cpu_source,
         }
     }
+}
+
+/// Physical memory where there's no `/proc` (macOS: `hw.memsize`).
+#[cfg(target_os = "macos")]
+fn os_memory() -> Option<u64> {
+    let mut v: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    // SAFETY: `hw.memsize` is a u64; `v` and `len` describe that buffer.
+    let r = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut v).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (r == 0 && v > 0).then_some(v)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_memory() -> Option<u64> {
+    None
 }
 
 fn read(p: &Path) -> Option<String> {
@@ -285,7 +312,7 @@ impl Budget {
             Auto::Auto => {
                 let m = det.memory.ok_or_else(|| {
                     AtlatlError::config(
-                        "cannot detect the memory limit (no cgroup limit or /proc/meminfo); set engine.memory",
+                        "cannot detect the memory limit (no cgroup limit, /proc/meminfo or hw.memsize); set engine.memory",
                     )
                 })?;
                 (

@@ -639,6 +639,7 @@ dependencies = [
  "atlatl-core",
  "atlatl-testkit",
  "duckdb",
+ "libc",
  "regex",
  "serde",
  "serde_json",

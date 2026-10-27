@@ -302,7 +302,11 @@ jobs:
           path: dist
           merge-multiple: true
       - run: |
+          set -o pipefail
           cd dist
+          # Each platform's artifact holds wheel/ and wheel-dbt/: both packages, three platforms.
+          find . -mindepth 2 -name '*.whl' -exec mv -t . {} +
+          [ "$(ls *.whl | wc -l)" -eq 6 ] || { echo "::error::expected 6 wheels"; ls -R; exit 1; }
           sha256sum -- *.whl *.tar.gz | tee SHA256SUMS
           # PyPI's per-file limit is 100 MiB by default.
           for f in *.whl; do
@@ -329,7 +333,7 @@ jobs:
       # Only dbt-atlatl is published for now; dagster-atlatl wheels are build artifacts only.
       - name: Select dbt-atlatl
         run: |
-          mkdir dist && mv wheels/dbt_atlatl-*.whl dist/
+          mkdir dist && find wheels -name 'dbt_atlatl-*.whl' -exec mv -t dist {} +
           ls dist
           [ "$(ls dist | wc -l)" -eq 3 ] || { echo "::error::expected 3 dbt-atlatl wheels"; exit 1; }
       - uses: pypa/gh-action-pypi-publish@release/v1

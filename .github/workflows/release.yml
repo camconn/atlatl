@@ -3,16 +3,17 @@ name: release
 # Platform wheels (dagster-atlatl and dbt-atlatl, each bundling the atlatl binary, libduckdb, the DuckDB extensions and,
 # on Linux, libsqlite3)
 # and standalone tarballs, from one build per platform (spec 09 §1). Publishing is chosen per run:
-# the `publish` input (manual runs) or the RELEASE_PUBLISH repo variable (tag pushes), default none.
+# the `publish` input (manual runs) or the RELEASE_PUBLISH repo variable (tag pushes), default none:
+# `pypi` (dbt-atlatl), `crates` (atlatl-cli and the atlatl-* crates on crates.io) or `all`.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       publish:
-        description: Where to publish the wheels
+        description: Where to publish (pypi = dbt-atlatl, crates = atlatl-cli and its crates)
         type: choice
-        options: [none, pypi]
+        options: [none, pypi, crates, all]
         default: none
 
 permissions:
@@ -34,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      publish: ${{ steps.meta.outputs.publish }}
+      pypi: ${{ steps.meta.outputs.pypi }}
+      crates: ${{ steps.meta.outputs.crates }}
     steps:
       - uses: actions/checkout@v4
       - id: meta
@@ -46,11 +48,21 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
             exit 1
           fi
-          case "$PUBLISH" in none | pypi) ;; *) echo "::error::bad publish target: $PUBLISH"; exit 1 ;; esac
+          case "$PUBLISH" in none | pypi | crates | all) ;; *) echo "::error::bad publish target: $PUBLISH"; exit 1 ;; esac
+          # Internal crates are published together, so their dependency versions must be this one.
+          python3 - "$version" <<'PY'
+          import re, sys, tomllib
+          deps = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["dependencies"]
+          bad = [k for k, v in deps.items() if k.startswith("atlatl-") and k != "atlatl-testkit"
+                 and (not isinstance(v, dict) or v.get("version") != sys.argv[1])]
+          if bad:
+              sys.exit(f"::error::workspace dependencies not at {sys.argv[1]}: {', '.join(bad)}")
+          PY
           grep -qx "duckdb=$DUCKDB_VERSION" scripts/fetch-license-texts.sh ||
             { echo "::error::licenses/ is not pinned to DuckDB $DUCKDB_VERSION; run scripts/fetch-license-texts.sh"; exit 1; }
           echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "publish=$PUBLISH" >>"$GITHUB_OUTPUT"
+          echo "pypi=$([ "$PUBLISH" = pypi ] || [ "$PUBLISH" = all ] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+          echo "crates=$([ "$PUBLISH" = crates ] || [ "$PUBLISH" = all ] && echo true || echo false)" >>"$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@1.90
       - run: scripts/third-party-licenses.sh dist/LICENSE-THIRD-PARTY
       - uses: actions/upload-artifact@v4
@@ -299,7 +311,7 @@ jobs:
 
   publish-pypi:
     needs: [prepare, checksums]
-    if: needs.prepare.outputs.publish == 'pypi'
+    if: needs.prepare.outputs.pypi == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -319,3 +331,34 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+
+  # atlatl-cli and the atlatl-* crates it depends on (atlatl-testkit is dev-only and stays
+  # unpublished), in dependency order. Trusted publishing (OIDC) through the `crates-io`
+  # environment; a crate must exist before a trusted publisher can be added, so the first release
+  # uses a one-off CRATES_IO_TOKEN secret on that environment, deleted afterwards.
+  publish-crates:
+    needs: [prepare, checksums]
+    if: needs.prepare.outputs.crates == 'true'
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      # One target dir for every crate's verification build; per-crate dirs (the default) need
+      # the whole dependency tree 16 times, more disk than a runner has.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/publish
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      # `cargo publish` builds each packaged crate: the system libsqlite3, and libduckdb fetched
+      # through `.cargo/config.toml` (DUCKDB_DOWNLOAD_LIB).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: env.CRATES_IO_TOKEN == ''
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || env.CRATES_IO_TOKEN }}
+        run: cargo publish --workspace --exclude atlatl-testkit --locked

@@ -130,6 +130,8 @@ fn long_calls_release_when_they_finish() {
 /// `Engine::purges` is per engine, so this holds with other engines busy in the process.
 #[test]
 fn low_mode_purges_during_calls_and_high_does_not() {
+    // Held throughout: `busy(&high)` is a long call too, and releases when it ends.
+    let _g = serial();
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let every = Duration::from_millis(PURGE_EVERY_MS);
     let busy = |e: &Engine| {
@@ -151,7 +153,6 @@ fn low_mode_purges_during_calls_and_high_does_not() {
     assert_eq!(low.budget().purge_every_ms, Some(PURGE_EVERY_MS));
     std::thread::sleep(every * 3);
     assert_eq!(low.purges(), 0, "idle: nothing in flight");
-    let _g = serial();
     let n = alloc::releases();
     busy(&low);
     let during = low.purges();

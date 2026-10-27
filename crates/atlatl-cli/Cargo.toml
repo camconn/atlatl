@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+description = "atlatl: pull data into DuckLake or DuckDB, and push lake tables to serving databases"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["etl", "duckdb", "ducklake", "cdc", "rest-api"]
+categories = ["command-line-utilities", "database"]
 
 [lints]
 workspace = true

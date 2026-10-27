@@ -32,7 +32,25 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
-exceptions = []
+# atlatl's own crates; a third-party AGPL dependency is still rejected.
+exceptions = [
+    { crate = "atlatl-cdc", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-cli", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-clickhouse", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-delta", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-ducklake", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-files", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-pgrepl", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-postgres", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-redshift", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-conn-sqlite", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-core", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-engine", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-http", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-ingest", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-run", allow = ["AGPL-3.0-or-later"] },
+    { crate = "atlatl-state", allow = ["AGPL-3.0-or-later"] },
+]
 
 [licenses.private]
 ignore = true

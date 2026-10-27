@@ -4,29 +4,34 @@ members = ["crates/*"]
 default-members = ["crates/*"]
 
 [workspace.package]
+# Internal dependencies below pin this version too (`release.yml` checks they match).
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-publish = false
+publish = true
+authors = ["Cameron Conn <cam@camconn.cc>"]
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/camconn/atlatl"
+homepage = "https://github.com/camconn/atlatl"
+readme = "README.md"
 
 [workspace.dependencies]
-atlatl-core = { path = "crates/atlatl-core" }
-atlatl-engine = { path = "crates/atlatl-engine" }
-atlatl-state = { path = "crates/atlatl-state" }
-atlatl-cdc = { path = "crates/atlatl-cdc" }
-atlatl-conn-clickhouse = { path = "crates/atlatl-conn-clickhouse" }
-atlatl-conn-ducklake = { path = "crates/atlatl-conn-ducklake" }
-atlatl-conn-delta = { path = "crates/atlatl-conn-delta" }
-atlatl-conn-files = { path = "crates/atlatl-conn-files" }
-atlatl-conn-postgres = { path = "crates/atlatl-conn-postgres" }
-atlatl-conn-pgrepl = { path = "crates/atlatl-conn-pgrepl" }
-atlatl-conn-redshift = { path = "crates/atlatl-conn-redshift" }
-atlatl-conn-sqlite = { path = "crates/atlatl-conn-sqlite" }
-atlatl-http = { path = "crates/atlatl-http" }
-atlatl-ingest = { path = "crates/atlatl-ingest" }
+atlatl-core = { path = "crates/atlatl-core", version = "0.1.0" }
+atlatl-engine = { path = "crates/atlatl-engine", version = "0.1.0" }
+atlatl-state = { path = "crates/atlatl-state", version = "0.1.0" }
+atlatl-cdc = { path = "crates/atlatl-cdc", version = "0.1.0" }
+atlatl-conn-clickhouse = { path = "crates/atlatl-conn-clickhouse", version = "0.1.0" }
+atlatl-conn-ducklake = { path = "crates/atlatl-conn-ducklake", version = "0.1.0" }
+atlatl-conn-delta = { path = "crates/atlatl-conn-delta", version = "0.1.0" }
+atlatl-conn-files = { path = "crates/atlatl-conn-files", version = "0.1.0" }
+atlatl-conn-postgres = { path = "crates/atlatl-conn-postgres", version = "0.1.0" }
+atlatl-conn-pgrepl = { path = "crates/atlatl-conn-pgrepl", version = "0.1.0" }
+atlatl-conn-redshift = { path = "crates/atlatl-conn-redshift", version = "0.1.0" }
+atlatl-conn-sqlite = { path = "crates/atlatl-conn-sqlite", version = "0.1.0" }
+atlatl-http = { path = "crates/atlatl-http", version = "0.1.0" }
+atlatl-ingest = { path = "crates/atlatl-ingest", version = "0.1.0" }
 atlatl-testkit = { path = "crates/atlatl-testkit" }
-atlatl-run = { path = "crates/atlatl-run" }
+atlatl-run = { path = "crates/atlatl-run", version = "0.1.0" }
 
 anyhow = "1"
 arrow = { version = "58", default-features = false, features = ["prettyprint"] }

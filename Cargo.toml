@@ -13,7 +13,6 @@ authors = ["Cameron Conn <cam@camconn.cc>"]
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/camconn/atlatl"
 homepage = "https://github.com/camconn/atlatl"
-readme = "README.md"
 
 [workspace.dependencies]
 atlatl-core = { path = "crates/atlatl-core", version = "0.1.0-rc.1" }

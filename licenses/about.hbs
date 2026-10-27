@@ -1,4 +1,5 @@
 {{#each licenses}}
+{{#unless (eq id "AGPL-3.0-or-later")}}
 --------------------------------------------------------------------------------
 {{{name}}} ({{{id}}}), used by:
 {{#each used_by}}
@@ -6,4 +7,5 @@
 {{/each}}
 
 {{{text}}}
+{{/unless}}
 {{/each}}

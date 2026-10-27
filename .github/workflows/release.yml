@@ -26,6 +26,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # The toolchain each job installs, over rust-toolchain.toml: its rustfmt/clippy components
+  # aren't needed to build, and installing them on these runners' toolchains fails
+  # ("detected conflict: bin/cargo-fmt").
+  RUSTUP_TOOLCHAIN: "1.90"
   DUCKDB_VERSION: v1.5.6
   ATLATL_EXTENSIONS: ducklake postgres_scanner httpfs aws
   MATURIN: maturin>=1.9,<2

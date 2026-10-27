@@ -9,6 +9,8 @@ import sysconfig
 from importlib import metadata
 from pathlib import Path
 
+from packaging.version import Version
+
 BIN_ENV = "ATLATL_BIN"
 EXTENSION_DIR_ENV = "ATLATL_EXTENSION_DIR"
 DIST = "dagster-atlatl"
@@ -100,7 +102,8 @@ def check_binary_version(binary: Path | None = None) -> str:
     exe = binary or binary_path()
     found = binary_version(exe)
     expected = package_version()
-    if os.environ.get(BIN_ENV) is None and found != expected:
+    # The binary prints Cargo's SemVer (0.1.0-rc.1), the package has its PEP 440 form (0.1.0rc1).
+    if os.environ.get(BIN_ENV) is None and Version(found) != Version(expected):
         raise AtlatlBinaryError(
             f"atlatl binary {exe} is version {found}, but dagster-atlatl is {expected}"
         )

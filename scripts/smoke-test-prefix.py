@@ -287,7 +287,10 @@ def check_dbt_package(prefix: Path, version: str) -> None:
     ext = _binary.extension_dir()
     if ext is None or ext.resolve() != (prefix / "share" / "atlatl" / "extensions").resolve():
         fail(f"dbt_atlatl extension_dir() is {ext}")
-    if metadata.version("dbt-atlatl") != version:
+    from packaging.version import Version
+
+    # PEP 440 for the package, Cargo's SemVer for the binary: 0.1.0rc1 is 0.1.0-rc.1.
+    if Version(metadata.version("dbt-atlatl")) != Version(version):
         fail(f"dbt-atlatl is {metadata.version('dbt-atlatl')}, not {version}")
     print(f"dbt_atlatl {version}: {exe}, {ext} ({dbt_atlatl.Plugin.__name__})")
 

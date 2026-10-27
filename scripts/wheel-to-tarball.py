@@ -55,7 +55,8 @@ def main() -> None:
         fail(f"wheel has no extensions for {platform}")
     files["LICENSE-THIRD-PARTY"] = Path(notices).read_bytes()
 
-    top = f"atlatl-{version}-{platform}"
+    # The binary's (Cargo) version, as the release names it; the wheel's is its PEP 440 form.
+    top = f"atlatl-{os.environ.get('VERSION', version)}-{platform}"
     out.mkdir(parents=True, exist_ok=True)
     dest = out / f"{top}.tar.gz"
     mtime = int(os.environ.get("SOURCE_DATE_EPOCH", time.time()))

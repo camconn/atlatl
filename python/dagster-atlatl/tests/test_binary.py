@@ -133,3 +133,14 @@ def test_resolves_from_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     monkeypatch.setattr(_binary.sysconfig, "get_path", paths_at(other))
     assert dagster_atlatl.binary_path() == (prefix / "bin" / "atlatl").resolve()
     assert dagster_atlatl.extension_dir() == (prefix / "share" / "atlatl" / "extensions").resolve()
+
+
+def test_prerelease_versions_match_across_spellings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    exe = fake_binary(tmp_path, "atlatl 0.1.0-rc.1")
+    monkeypatch.setattr(_binary, "package_version", lambda: "0.1.0rc1")
+    assert dagster_atlatl.check_binary_version(exe) == "0.1.0-rc.1"
+    monkeypatch.setattr(_binary, "package_version", lambda: "0.1.0rc2")
+    with pytest.raises(dagster_atlatl.AtlatlBinaryError, match=r"0\.1\.0-rc\.1"):
+        dagster_atlatl.check_binary_version(exe)

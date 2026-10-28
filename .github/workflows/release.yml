@@ -33,6 +33,9 @@ env:
   DUCKDB_VERSION: v1.5.6
   ATLATL_EXTENSIONS: ducklake postgres_scanner httpfs aws
   MATURIN: maturin>=1.9,<2
+  # Over pip's and cargo's defaults (5 and 3), for flaky registries.
+  PIP_RETRIES: "10"
+  CARGO_NET_RETRY: "10"
 
 jobs:
   prepare:
@@ -76,6 +79,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    name: linux (${{ matrix.platform }})
     needs: prepare
     strategy:
       fail-fast: false
@@ -83,14 +87,15 @@ jobs:
         include:
           - platform: linux_amd64
             runner: ubuntu-24.04
-            image: quay.io/pypa/manylinux_2_28_x86_64
+            image: quay.io/pypa/manylinux_2_28_x86_64@sha256:e0adf18521ad35192df733a6c62d35df7801957d24e0470238aacecfab2188a3 # 2026.10.26-1
             libduckdb: libduckdb-linux-amd64.zip
           - platform: linux_arm64
             runner: ubuntu-24.04-arm
-            image: quay.io/pypa/manylinux_2_28_aarch64
+            image: quay.io/pypa/manylinux_2_28_aarch64@sha256:a3e02308c822fb6ce0d12248b0c941817ba5e1a1bc9e7bb5929f29c50eaa40a9 # 2026.10.26-1
             libduckdb: libduckdb-linux-arm64.zip
     runs-on: ${{ matrix.runner }}
-    # glibc 2.28, the official extensions' baseline.
+    # glibc 2.28, the official extensions' baseline. Pinned by digest (the comment is the image's
+    # dated tag); bump both together after a `publish: none` dispatch.
     container: ${{ matrix.image }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -110,12 +115,18 @@ jobs:
           path: dist
       - name: Install Rust
         run: |
-          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.90
+          curl -fsSL --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.90
           echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
       # The binary links libsqlite3 dynamically (06 §6); AlmaLinux 8's 3.26 meets the 3.24 floor.
       - name: Install SQLite
         run: |
-          dnf install -y -q sqlite-devel
+          # A mirror sometimes serves empty metadata; drop it so the next try picks another.
+          for i in 1 2 3 4 5; do
+            dnf install -y -q sqlite-devel && break
+            [ "$i" = 5 ] && exit 1
+            dnf clean metadata
+            sleep $((i * 15))
+          done
           rpm -q sqlite-devel sqlite-libs
       - name: Fetch libduckdb and extensions
         run: |
@@ -336,9 +347,11 @@ jobs:
           mkdir dist && find wheels -name 'dbt_atlatl-*.whl' -exec mv -t dist {} +
           ls dist
           [ "$(ls dist | wc -l)" -eq 3 ] || { echo "::error::expected 3 dbt-atlatl wheels"; exit 1; }
+      # skip-existing: a rerun after a partial upload publishes only what's missing.
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          skip-existing: true
 
   # atlatl-cli and the atlatl-* crates it depends on (atlatl-testkit is dev-only and stays
   # unpublished), in dependency order, with trusted publishing (OIDC) through the `crates-io`

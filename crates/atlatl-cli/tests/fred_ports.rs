@@ -9,8 +9,9 @@
 //! shows the DDL a fresh table would get.
 //!
 //! CI replays the committed cassettes (`examples/fred/apis/fred/cassettes/`) and the FRED data
-//! recorded with them (`examples/fred/data/`). `record_fred_cassettes` and `live_*` call
-//! fred.stlouisfed.org: they only run with the `network` feature (`cargo test-network`, 12 §5).
+//! recorded with them (`examples/fred/data/`). `record_fred_cassettes` and `live_*` call FRED:
+//! they only run with the `network` feature (`cargo test-network`, 12 §5), and the keyed JSON API
+//! test also needs `FRED_API_KEY`.
 
 mod dogfood_support;
 
@@ -1999,4 +2000,105 @@ fn live_fred_endpoints() {
     let r = f.run(&["bulk_dgs10"], None);
     r.ok();
     assert!(f.count("lake.br.bulk_dgs10") > 0);
+}
+
+/// `FRED_API_KEY` from the environment, else from the workspace `.env`.
+fn fred_api_key() -> Option<String> {
+    let file = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env"))
+        .unwrap_or_default();
+    std::env::var("FRED_API_KEY")
+        .ok()
+        .or_else(|| {
+            file.lines()
+                .find_map(|l| l.strip_prefix("FRED_API_KEY=").map(str::to_owned))
+        })
+        .filter(|k| !k.is_empty())
+}
+
+/// Files under `dir` whose bytes contain `needle`.
+fn files_containing(dir: &Path, needle: &[u8]) -> Vec<PathBuf> {
+    let mut hits = Vec::new();
+    for e in std::fs::read_dir(dir).expect("read_dir") {
+        let p = e.expect("entry").path();
+        if p.is_dir() {
+            hits.extend(files_containing(&p, needle));
+        } else if std::fs::read(&p)
+            .expect("read")
+            .windows(needle.len())
+            .any(|w| w == needle)
+        {
+            hits.push(p);
+        }
+    }
+    hits
+}
+
+/// The keyed JSON API (`apis/fred_api.yaml`; about a dozen requests with the graph CSV): UNRATE
+/// paged by offset lands the same rows as the keyless graph CSV, "." becomes NULL, and the key is
+/// redacted everywhere. Skips without `FRED_API_KEY` (environment or `.env`).
+#[test]
+#[cfg_attr(
+    not(feature = "network"),
+    ignore = "calls api.stlouisfed.org (needs --features network and FRED_API_KEY)"
+)]
+fn live_fred_api_unrate_matches_the_graph_csv() {
+    if !network() {
+        return;
+    }
+    let Some(key) = fred_api_key() else {
+        eprintln!("skipped: no FRED_API_KEY in the environment or .env");
+        return;
+    };
+    let mut f = Fred::new();
+    f.live = true;
+    f.set("FRED_API_KEY", key.as_str());
+
+    let o = f.atlatl(&["api", "test", "fred_api", "unrate", "--json"]);
+    assert!(o.status.success(), "{}", out(&o));
+    let v: Value = serde_json::from_slice(&o.stdout).expect("json");
+    assert!(v["error"].is_null(), "{v:#}");
+    let urls: Vec<&str> = v["interactions"]
+        .as_array()
+        .expect("interactions")
+        .iter()
+        .map(|i| i["request"]["url"].as_str().expect("url"))
+        .collect();
+    assert_eq!(urls.len(), 2, "--pages 2 by default: {urls:?}");
+    for (u, offset) in urls.iter().zip(["offset=0&", "offset=24&"]) {
+        assert!(u.contains(offset) && u.ends_with("api_key=****"), "{u}");
+    }
+
+    let o = f.atlatl(&["schema", "check", "fred_api/unrate", "--from-api-test"]);
+    assert!(o.status.success(), "{}", out(&o));
+
+    let keyed = f.run(&["fred_api_unrate"], None);
+    keyed.ok();
+    let graph = f.run(&["fred_series"], None);
+    graph.ok();
+
+    let n = f.count("lake.br.fred_api_unrate");
+    assert!(n >= 70, "UNRATE since 2020 is monthly: {n} rows");
+    assert_eq!(
+        f.count("lake.br.fred_observations WHERE series_id = 'UNRATE'"),
+        n
+    );
+    let rows = "SELECT observation_date::VARCHAR, value::VARCHAR FROM";
+    let diff = f.q(&format!(
+        "SELECT count(*)::VARCHAR FROM (({rows} lake.br.fred_api_unrate) \
+         EXCEPT ({rows} lake.br.fred_observations WHERE series_id = 'UNRATE'))"
+    ));
+    assert_eq!(diff, ["0"], "the API and the graph CSV disagree");
+    assert_eq!(
+        f.q("SELECT observation_date::VARCHAR FROM lake.br.fred_api_unrate WHERE value IS NULL"),
+        ["2025-10-01"],
+        "\".\" (BLS never published October 2025) is NULL"
+    );
+
+    for r in [&keyed, &graph] {
+        assert!(!r.stdout.contains(&key) && !r.stderr.contains(&key));
+        assert!(!r.report.to_string().contains(&key));
+    }
+    for dir in [f.path(), f.lake.dir.path()] {
+        assert_eq!(files_containing(dir, key.as_bytes()), Vec::<PathBuf>::new());
+    }
 }

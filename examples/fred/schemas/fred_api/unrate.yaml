@@ -1,0 +1,5 @@
+# As schemas/fred/series.yaml: `value` is NULL for the month BLS never published (October 2025).
+schema:
+  fields:
+    observation_date: {type: date, nullable: false}
+    value: {type: decimal}

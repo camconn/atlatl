@@ -8,7 +8,7 @@ environments:
   base: dev
   parity:
     # A parity run writes a scratch lake; sources are shared.
-    allow_base: [fred, fred_files, fred_s3, appdb, warehouse]
+    allow_base: [fred, fred_api, fred_files, fred_s3, appdb, warehouse]
 
 engine: {memory: 1GB, threads: 2}
 
@@ -29,6 +29,11 @@ connections:
   fred:
     type: rest
     spec: apis/fred.yaml
+
+  fred_api:
+    type: rest
+    spec: apis/fred_api.yaml
+    secrets: {api_key: {secret: env:FRED_API_KEY}}
 
   # M8.2a: the app database (a local Postgres seeded with FRED data by the tests).
   appdb:

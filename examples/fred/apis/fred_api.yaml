@@ -1,0 +1,21 @@
+# FRED's JSON API (api.stlouisfed.org): the series behind the graph CSVs, with a free key in the
+# query string (FRED_API_KEY) and offset paging. A missing observation is "." here, where the graph
+# CSV leaves the field empty; the records path turns it into null.
+name: fred_api
+base_url: https://api.stlouisfed.org/fred
+auth: {type: query, params: {api_key: "{{ secrets.api_key }}"}}
+rate_limit: {rps: 1, max_in_flight: 1}
+defaults:
+  params: {file_type: json}
+
+endpoints:
+  # UNRATE (monthly) from 2020, two years a page.
+  unrate:
+    request:
+      path: /series/observations
+      params: {series_id: UNRATE, observation_start: "2020-01-01", sort_order: asc}
+    paginate: {type: offset, param: offset, limit_param: limit, limit: 24, total_from: count}
+    decode: {format: json}
+    records:
+      path: "observations[].{observation_date: date, value: [value][?@ != '.'] | [0]}"
+      primary_key: [observation_date]

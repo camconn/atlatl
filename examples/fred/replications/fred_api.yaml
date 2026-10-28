@@ -1,0 +1,11 @@
+# The keyed JSON API (FRED_API_KEY).
+replications:
+  fred_api_unrate:
+    source: fred_api
+    target: lake
+    streams:
+      - id: fred_api/unrate
+        from: {endpoint: unrate}
+        object: br.fred_api_unrate
+        mode: incremental
+        primary_key: [observation_date]

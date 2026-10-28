@@ -1,0 +1,44 @@
+# Live-internet tests (spec 12 §5): `cargo test-network` against FRED, on pushes to master and on
+# demand, never on pull requests (forks get no secrets). The keyed JSON API test needs the
+# FRED_API_KEY secret.
+name: network
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: network-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fred:
+    runs-on: ubuntu-latest
+    env:
+      ATLATL_EXTENSION_DIR: ${{ github.workspace }}/extensions
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+    steps:
+      # The keyed test skips without a key; here a missing secret is a failure.
+      - run: '[ -n "$FRED_API_KEY" ] || { echo "::error::FRED_API_KEY secret is not set"; exit 1; }'
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/duckdb-download
+          key: cargo-network-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-network-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: extensions
+          key: duckdb-extensions-${{ runner.os }}-${{ hashFiles('scripts/fetch-duckdb-extensions.sh') }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - run: scripts/fetch-duckdb-extensions.sh
+      - run: cargo test-network --locked

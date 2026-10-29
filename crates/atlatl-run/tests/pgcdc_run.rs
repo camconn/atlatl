@@ -187,3 +187,89 @@ async fn pg16_backfill_changes_up_to_date() {
 async fn pg12_backfill_changes_up_to_date() {
     backfill_changes_up_to_date(12).await
 }
+
+async fn discover(e: &Env) -> atlatl_core::error::Result<()> {
+    let (p, d) = atlatl_core::config::load(e.project.path());
+    assert!(!d.has_errors(), "{d:?}");
+    let vars: Arc<dyn EnvSource> = Arc::new(MapEnv::default());
+    let req = PlanRequest {
+        discover: true,
+        ..PlanRequest::all()
+    };
+    let (mut plan, _) = atlatl_core::plan::build(
+        &p,
+        &req,
+        vars.clone(),
+        atlatl_core::redact::Redactor::global(),
+    )
+    .expect("plan");
+    atlatl_run::pgsrc::discover_plan(&p, &mut plan, vars).await
+}
+
+async fn slots_and_publications(e: &Env) -> (i64, i64) {
+    let r = e
+        .sql
+        .client()
+        .query_one(
+            "SELECT (SELECT count(*) FROM pg_replication_slots), (SELECT count(*) FROM pg_publication)",
+            &[],
+        )
+        .await
+        .expect("count");
+    (r.get(0), r.get(1))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pg16_plan_discover_reports_refused_columns() {
+    let e = setup(16).await;
+    e.sql
+        .client()
+        .batch_execute("CREATE TABLE ledger (id int PRIMARY KEY, cash money, note text)")
+        .await
+        .expect("ledger");
+    let reps = |columns: &str| {
+        format!(
+            "replications:\n  {REP}:\n    source: appdb_pg\n    target: lake\n    streams:\n      - {{id: appdb/users, mode: cdc, from: {{table: public.users}}, object: br.users}}\n      - {{id: appdb/ledger, mode: cdc, from: {{table: public.ledger}}, object: br.ledger{columns}}}\n"
+        )
+    };
+    let path = e.project.path().join("replications/appdb.yaml");
+    std::fs::write(&path, reps("")).expect("reps");
+
+    let err = discover(&e)
+        .await
+        .expect_err("plan --discover checks cdc types");
+    assert_eq!(
+        (err.class.to_string().as_str(), err.code.as_deref()),
+        ("config", Some("source_type")),
+        "{err}"
+    );
+    assert!(
+        err.message
+            .contains("`public.ledger`: column `cash` is money"),
+        "{}",
+        err.message
+    );
+    assert_eq!(
+        slots_and_publications(&e).await,
+        (0, 0),
+        "plan creates nothing"
+    );
+
+    let r = go(&e).await;
+    let x = &r.replications[0];
+    assert_eq!(x.status, ReplicationStatus::Failed);
+    let run = x.error.as_ref().expect("error");
+    assert_eq!(
+        run.message, err.message,
+        "the plan reports what the run would"
+    );
+    assert_eq!(slots_and_publications(&e).await, (0, 0));
+
+    std::fs::write(&path, reps(", columns: {cash: {type: VARCHAR}}")).expect("reps");
+    discover(&e).await.expect("declared column passes");
+    assert_eq!(
+        slots_and_publications(&e).await,
+        (0, 0),
+        "plan creates nothing"
+    );
+}

@@ -2,7 +2,7 @@
 //! read-only Postgres attach. Results use the same TEMP-table shape as [`crate::net_changes`].
 
 use atlatl_core::error::{AtlatlError, Result};
-use duckdb::Connection;
+use duckdb::{Connection, OptionalExt};
 use serde::Serialize;
 
 use crate::{NetChanges, Source, db, ident};
@@ -43,14 +43,21 @@ fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// Target columns with the scanner's DuckDB type and Postgres's own `format_type` / `typname`.
+/// Target columns with the scanner's DuckDB type and Postgres's own `format_type` / `typname`
+/// of the base type (a domain resolved to the type it's over).
 fn pg_columns(c: &Connection, t: &Target) -> Result<Vec<(String, String, String, String)>> {
     let scanned = types(c, &t.fq())?;
-    let rel = format!("{}.{}", ident(&t.schema), ident(&t.table));
+    let rel = lit(&format!("{}.{}", ident(&t.schema), ident(&t.table)));
     let q = format!(
-        "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), ty.typname::text FROM pg_attribute a \
-         JOIN pg_type ty ON ty.oid = a.atttypid WHERE a.attrelid = {}::regclass AND a.attnum > 0 AND NOT a.attisdropped",
-        lit(&rel)
+        "WITH RECURSIVE b(attnum, oid, typmod) AS ( \
+           SELECT a.attnum, a.atttypid, a.atttypmod FROM pg_attribute a \
+           WHERE a.attrelid = {rel}::regclass AND a.attnum > 0 AND NOT a.attisdropped \
+           UNION ALL \
+           SELECT b.attnum, ty.typbasetype, ty.typtypmod FROM b JOIN pg_type ty ON ty.oid = b.oid WHERE ty.typtype = 'd') \
+         SELECT a.attname::text, format_type(b.oid, b.typmod), ty.typname::text FROM b \
+         JOIN pg_type ty ON ty.oid = b.oid \
+         JOIN pg_attribute a ON a.attrelid = {rel}::regclass AND a.attnum = b.attnum \
+         WHERE ty.typtype <> 'd'"
     );
     let mut st = c
         .prepare(&format!(
@@ -83,8 +90,9 @@ enum ColKind {
     Plain(String),
     /// json/jsonb: compare canonical text (key order, spacing).
     Json,
-    /// Unconstrained `numeric` (the scanner says DOUBLE): keep lake values exact, read the
-    /// target as text and compare in the lake's type.
+    /// A `numeric` the scanner doesn't read as DECIMAL (DOUBLE when unconstrained or over 38
+    /// digits, VARCHAR through a domain): keep lake values exact, read the target as text and
+    /// compare in the lake's type.
     Numeric,
     /// `timestamp(p)` / `time(p)` with p < 6: Postgres rounds on write, so compare lake values
     /// rounded to p digits.
@@ -95,7 +103,7 @@ fn col_kind(duck: &str, format: &str, typname: &str) -> ColKind {
     if matches!(typname, "json" | "jsonb") {
         return ColKind::Json;
     }
-    if format == "numeric" && duck == "DOUBLE" {
+    if typname == "numeric" && !duck.starts_with("DECIMAL") {
         return ColKind::Numeric;
     }
     if (format.starts_with("timestamp(") || format.starts_with("time("))
@@ -109,6 +117,35 @@ fn col_kind(duck: &str, format: &str, typname: &str) -> ColKind {
         return ColKind::Timestamp(duck.to_owned(), p);
     }
     ColKind::Plain(duck.to_owned())
+}
+
+/// DuckDB's last timestamp (UTC). Postgres's run to 294276 AD; the scanner lands the next
+/// microsecond as `infinity`, wraps later ones to BC or fails unnamed.
+const LAST_TIMESTAMP: &str = "294247-01-10 04:00:54.775806";
+
+/// A target value the scanner reads wrong, looked for in Postgres: the predicate on column `i`
+/// and the error's tail after `holds <value>`.
+fn unlandable(duck: &str, i: &str) -> Option<(String, String)> {
+    let (last, t) = match duck {
+        "TIMESTAMP" => (LAST_TIMESTAMP.to_owned(), "timestamp"),
+        "TIMESTAMP WITH TIME ZONE" => (format!("{LAST_TIMESTAMP}+00"), "timestamptz"),
+        d if d.starts_with("DECIMAL") => {
+            return Some((
+                format!("{i} = 'NaN'"),
+                ", which a decimal can't hold".to_owned(),
+            ));
+        }
+        _ => return None,
+    };
+    Some((
+        format!("{i} > '{last}'::{t} AND {i} < 'infinity'"),
+        format!(", past the last timestamp the lake holds ({last})"),
+    ))
+}
+
+/// Numeric text without trailing fractional zeros, so `1.50` (Postgres) matches `1.5000`.
+fn numeric_text(e: &str) -> String {
+    format!("CASE WHEN contains({e}, '.') THEN rtrim(rtrim({e}, '0'), '.') ELSE {e} END")
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -194,11 +231,46 @@ pub fn diff(
         })
         .collect::<Vec<_>>()
         .join(", ");
+    // Unlandable values are nulled in Postgres; those that would sway the diff are flagged and
+    // fail it. Reload compares nothing but the key.
+    let is_pk = |n: &str| s.primary_key.iter().any(|k| k == n);
+    let mut flagged = Vec::new();
     let pg_cols = kinds
         .iter()
-        .map(|(n, k)| match k {
-            ColKind::Json | ColKind::Numeric => format!("{}::text AS {}", ident(n), ident(n)),
-            _ => ident(n),
+        .map(|(n, k)| {
+            let i = ident(n);
+            let duck = match k {
+                ColKind::Json | ColKind::Numeric => return format!("{i}::text AS {i}"),
+                ColKind::Plain(d) | ColKind::Timestamp(d, _) => d,
+            };
+            let Some((bad, why)) = unlandable(duck, &i) else {
+                return i;
+            };
+            // A `CASE` drops the typmod: numeric(p,s) would scan as DOUBLE.
+            let base = tgt
+                .iter()
+                .find(|(p, ..)| p == n)
+                .map(|(_, _, f, _)| f.as_str())
+                .filter(|f| !f.is_empty())
+                .map(|f| format!("::{f}"))
+                .unwrap_or_default();
+            let col = format!("(CASE WHEN {bad} THEN NULL ELSE {i} END){base} AS {i}");
+            let sways = is_pk(n) || (mode == Mode::Adopt && !s.ignore.iter().any(|x| x == n));
+            if !sways {
+                return col;
+            }
+            let flag = ident(&format!("atlatl_bad_{}", flagged.len()));
+            let fix = if is_pk(n) {
+                "correct it in the target"
+            } else {
+                "correct it in the target, or bootstrap with `--mode reload`, which overwrites it"
+            };
+            flagged.push((
+                flag.clone(),
+                format!("column `{n}` of `{}.{}` holds ", t.schema, t.table),
+                format!("{why}; {fix}"),
+            ));
+            format!("{col}, CASE WHEN {bad} THEN ({i})::text END AS {flag}")
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -226,6 +298,38 @@ pub fn diff(
         q = lit(&tgt_sql),
     ))
     .map_err(db)?;
+    if !flagged.is_empty() {
+        let which = flagged
+            .iter()
+            .enumerate()
+            .map(|(k, (f, ..))| format!("WHEN {f} IS NOT NULL THEN {k}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let vals = flagged
+            .iter()
+            .map(|(f, ..)| f.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let hit: Option<(i64, String)> = c
+            .query_row(
+                &format!(
+                    "SELECT CASE {which} END, coalesce({vals}) FROM {} WHERE coalesce({vals}) IS NOT NULL LIMIT 1",
+                    tn("target")
+                ),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(db)?;
+        if let Some((k, v)) = hit {
+            let (_, head, tail) = &flagged[k as usize];
+            return Err(AtlatlError::data(format!("{head}{v}{tail}")));
+        }
+        for (f, ..) in &flagged {
+            c.execute_batch(&format!("ALTER TABLE {} DROP COLUMN {f}", tn("target")))
+                .map_err(db)?;
+        }
+    }
     let on = s
         .primary_key
         .iter()
@@ -246,7 +350,13 @@ pub fn diff(
                 ),
                 ColKind::Numeric => {
                     let ty = lake_types.iter().find(|(c, _)| c == n).map(|(_, t)| t.clone()).unwrap_or_else(|| "VARCHAR".into());
-                    (a, format!("TRY_CAST({b} AS {ty})"))
+                    let exact = ty.starts_with("DECIMAL")
+                        || matches!(ty.trim_start_matches('U'), "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "HUGEINT");
+                    if exact {
+                        (numeric_text(&format!("CAST({a} AS VARCHAR)")), numeric_text(&b))
+                    } else {
+                        (a, format!("TRY_CAST({b} AS {ty})"))
+                    }
                 }
                 ColKind::Timestamp(ty, p) if ty == "TIME" => {
                     let unit = 10i64.pow(6 - p);
@@ -372,7 +482,8 @@ pub fn dry_run(
 
 #[cfg(test)]
 mod tests {
-    use atlatl_testkit::{LocalLake, pg16};
+    use atlatl_core::error::ErrorClass;
+    use atlatl_testkit::{LocalLake, Postgres, pg12, pg16};
 
     use super::*;
     use crate::head;
@@ -470,5 +581,239 @@ mod tests {
             ..s
         };
         assert!(diff(&c, &bad, at, &t, Mode::Adopt, "b3").is_err());
+    }
+
+    fn ids(c: &Connection, nc: &NetChanges) -> Vec<i64> {
+        let mut st = c
+            .prepare(&format!(
+                "SELECT id FROM {} ORDER BY id",
+                ident(&nc.upserts)
+            ))
+            .expect("q");
+        st.query_map([], |r| r.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    }
+
+    fn unreadable_target_values_fail_loudly(pg: &Postgres) {
+        let db_name = pg.fresh_db().expect("db");
+        let dsn = pg.dsn(&db_name);
+        exec_pg(
+            &dsn,
+            "CREATE SCHEMA ap;
+             CREATE TABLE ap.e (id bigint PRIMARY KEY, ts timestamp, tz timestamptz, n numeric(5,2), u numeric);
+             INSERT INTO ap.e VALUES
+               (1, '294247-01-10 04:00:54.775806', '294247-01-10 04:00:54.775806+00', 1.5, 1.50),
+               (2, 'infinity', '-infinity', NULL, NULL),
+               (3, '4714-11-24 00:00:00 BC', '4714-11-24 00:00:00+00 BC', NULL, NULL),
+               (4, NULL, NULL, NULL, 'NaN'),
+               (5, NULL, NULL, NULL, 1.23456);",
+        );
+        let lake = LocalLake::file().expect("lake");
+        let c = lake.open("lake").expect("open");
+        c.execute_batch(&format!(
+            "SET TimeZone = 'UTC';
+             CREATE SCHEMA lake.au;
+             CREATE TABLE lake.au.e (id BIGINT, ts TIMESTAMP, tz TIMESTAMPTZ, n DECIMAL(5,2), u DECIMAL(18,4));
+             INSERT INTO lake.au.e VALUES
+               (1, '294247-01-10 04:00:54.775806', '294247-01-10 04:00:54.775806+00', 1.5, 1.5),
+               (2, 'infinity', '-infinity', NULL, NULL),
+               (3, make_timestamp(-210866803200000000), make_timestamp(-210866803200000000)::TIMESTAMPTZ, NULL, NULL),
+               (4, NULL, NULL, NULL, NULL),
+               (5, NULL, NULL, NULL, 1.2346);
+             ATTACH '{dsn}' AS app (TYPE postgres, READ_ONLY);"
+        ))
+        .expect("lake");
+        let at = head(&c, "lake").expect("head");
+        let s = Source {
+            catalog: "lake".into(),
+            schema: "au".into(),
+            table: "e".into(),
+            primary_key: vec!["id".into()],
+            columns: ["id", "ts", "tz", "n", "u"]
+                .iter()
+                .map(|c| ((*c).to_owned(), format!("\"{c}\"")))
+                .collect(),
+            ignore: vec![],
+            filter: None,
+        };
+        let t = Target {
+            attach: "app".into(),
+            schema: "ap".into(),
+            table: "e".into(),
+            soft_delete_column: None,
+            soft_delete_bool: false,
+        };
+        let nc = diff(&c, &s, at, &t, Mode::Adopt, "x0").expect("adopt");
+        assert_eq!(
+            ids(&c, &nc),
+            [4, 5],
+            "edges land exactly; NaN and digits past the lake's scale differ"
+        );
+
+        let reset = "UPDATE ap.e SET ts = 'infinity', tz = '-infinity', n = NULL WHERE id = 2;";
+        let fix =
+            "; correct it in the target, or bootstrap with `--mode reload`, which overwrites it";
+        let cases = [
+            (
+                "ts = '294247-01-10 04:00:54.775807'",
+                format!(
+                    "column `ts` of `ap.e` holds 294247-01-10 04:00:54.775807, past the last timestamp the lake holds (294247-01-10 04:00:54.775806){fix}"
+                ),
+            ),
+            (
+                "ts = '294247-01-10 04:00:54.775808'",
+                format!(
+                    "column `ts` of `ap.e` holds 294247-01-10 04:00:54.775808, past the last timestamp the lake holds (294247-01-10 04:00:54.775806){fix}"
+                ),
+            ),
+            (
+                "ts = '294276-12-31 23:59:59.999999'",
+                format!(
+                    "column `ts` of `ap.e` holds 294276-12-31 23:59:59.999999, past the last timestamp the lake holds (294247-01-10 04:00:54.775806){fix}"
+                ),
+            ),
+            (
+                "tz = '294247-01-10 04:00:54.775807+00'",
+                format!(
+                    "column `tz` of `ap.e` holds 294247-01-10 04:00:54.775807+00, past the last timestamp the lake holds (294247-01-10 04:00:54.775806+00){fix}"
+                ),
+            ),
+            (
+                "n = 'NaN'",
+                format!("column `n` of `ap.e` holds NaN, which a decimal can't hold{fix}"),
+            ),
+        ];
+        for (k, (set, want)) in cases.iter().enumerate() {
+            exec_pg(
+                &dsn,
+                &format!("{reset} UPDATE ap.e SET {set} WHERE id = 2;"),
+            );
+            let e = diff(&c, &s, at, &t, Mode::Adopt, &format!("x{k}")).expect_err(set);
+            assert_eq!(
+                (e.class, e.message.as_str()),
+                (ErrorClass::Data, want.as_str()),
+                "{set}"
+            );
+            let nc = diff(&c, &s, at, &t, Mode::Reload, &format!("r{k}")).expect(set);
+            assert_eq!(nc.upsert_rows, 5, "reload overwrites {set}");
+            let col = set.split(' ').next().expect("col");
+            let ig = Source {
+                ignore: vec![col.into()],
+                ..s.clone()
+            };
+            let nc = diff(&c, &ig, at, &t, Mode::Adopt, &format!("i{k}")).expect(set);
+            assert_eq!(ids(&c, &nc), [4, 5], "ignored {col} doesn't sway the diff");
+        }
+
+        exec_pg(
+            &dsn,
+            &format!(
+                "{reset} CREATE TABLE ap.k (id timestamp PRIMARY KEY);
+                 INSERT INTO ap.k VALUES ('294250-01-01 00:00:00');"
+            ),
+        );
+        let k = Source {
+            columns: vec![("id".into(), "\"ts\"".into())],
+            ..s.clone()
+        };
+        let e = diff(
+            &c,
+            &k,
+            at,
+            &Target {
+                table: "k".into(),
+                ..t.clone()
+            },
+            Mode::Reload,
+            "k0",
+        )
+        .expect_err("key");
+        assert_eq!(
+            e.message,
+            "column `id` of `ap.k` holds 294250-01-01 00:00:00, past the last timestamp the lake holds (294247-01-10 04:00:54.775806); correct it in the target"
+        );
+    }
+
+    /// The scanner reads `numeric(p>38)` as DOUBLE and a domain as VARCHAR: values differing
+    /// past a float's precision still differ, and `1.50` still equals `1.5`.
+    fn wide_numerics_compare_exactly(pg: &Postgres) {
+        let db_name = pg.fresh_db().expect("db");
+        let dsn = pg.dsn(&db_name);
+        exec_pg(
+            &dsn,
+            "CREATE SCHEMA ap;
+             CREATE DOMAIN ap.amount AS numeric;
+             CREATE DOMAIN ap.wide AS numeric(50,2);
+             CREATE TABLE ap.e (id bigint PRIMARY KEY, w numeric(50,2), d ap.amount, x ap.wide);
+             INSERT INTO ap.e VALUES
+               (1, 1234567890123456789.01, 1234567890123456789.01, 1.5),
+               (2, 1234567890123456789.02, 1.5, 1.5),
+               (3, 1.5, 1234567890123456789.02, 1.5),
+               (4, 1.5, 1.5, 1234567890123456789.02);",
+        );
+        let lake = LocalLake::file().expect("lake");
+        let c = lake.open("lake").expect("open");
+        c.execute_batch(&format!(
+            "CREATE SCHEMA lake.au;
+             CREATE TABLE lake.au.e (id BIGINT, w DECIMAL(38,2), d DECIMAL(38,2), x DECIMAL(38,2));
+             INSERT INTO lake.au.e VALUES
+               (1, 1234567890123456789.01, 1234567890123456789.01, 1.5),
+               (2, 1234567890123456789.01, 1.5, 1.5),
+               (3, 1.5, 1234567890123456789.01, 1.5),
+               (4, 1.5, 1.5, 1234567890123456789.01);
+             ATTACH '{dsn}' AS app (TYPE postgres, READ_ONLY);"
+        ))
+        .expect("lake");
+        let mut scanned = types(&c, "app.ap.e").expect("describe");
+        scanned.sort();
+        assert_eq!(
+            scanned.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(),
+            ["VARCHAR", "BIGINT", "DOUBLE", "VARCHAR"],
+            "{scanned:?}"
+        );
+        let at = head(&c, "lake").expect("head");
+        let s = Source {
+            catalog: "lake".into(),
+            schema: "au".into(),
+            table: "e".into(),
+            primary_key: vec!["id".into()],
+            columns: ["id", "w", "d", "x"]
+                .iter()
+                .map(|c| ((*c).to_owned(), format!("\"{c}\"")))
+                .collect(),
+            ignore: vec![],
+            filter: None,
+        };
+        let t = Target {
+            attach: "app".into(),
+            schema: "ap".into(),
+            table: "e".into(),
+            soft_delete_column: None,
+            soft_delete_bool: false,
+        };
+        let nc = diff(&c, &s, at, &t, Mode::Adopt, "w0").expect("adopt");
+        assert_eq!(ids(&c, &nc), [2, 3, 4]);
+    }
+
+    #[test]
+    fn wide_numerics_compare_exactly_pg12() {
+        wide_numerics_compare_exactly(pg12());
+    }
+
+    #[test]
+    fn wide_numerics_compare_exactly_pg16() {
+        wide_numerics_compare_exactly(pg16());
+    }
+
+    #[test]
+    fn unreadable_target_values_fail_loudly_pg12() {
+        unreadable_target_values_fail_loudly(pg12());
+    }
+
+    #[test]
+    fn unreadable_target_values_fail_loudly_pg16() {
+        unreadable_target_values_fail_loudly(pg16());
     }
 }

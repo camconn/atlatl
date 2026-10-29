@@ -62,25 +62,38 @@ fn lake(e: &Env, sql: &str) {
         .expect(sql);
 }
 
+const PG: &str = "CREATE SCHEMA dagster;
+CREATE TYPE dagster.kind AS ENUM ('a', 'b');
+CREATE TABLE dagster.entity (object_id bigint PRIMARY KEY, name text, kind dagster.kind, deleted_at timestamptz, inserted_at timestamptz DEFAULT now());
+CREATE TABLE dagster.event (id bigint PRIMARY KEY, entity_id bigint REFERENCES dagster.entity (object_id), v text);
+INSERT INTO dagster.entity (object_id, name, kind) VALUES (1, 'stale', 'a'), (99, 'gone', 'b');";
+
 async fn setup(pg: &'static Postgres) -> Env {
-    let lake = LocalLake::file().expect("lake");
-    let c = lake.open("lake").expect("open");
-    c.execute_batch(
+    setup_with(
+        pg,
         "CREATE SCHEMA lake.src;
          CREATE TABLE lake.src.entity AS SELECT * FROM (VALUES (1, 'one', 'A'), (2, 'two', 'B'), (3, 'three', 'A')) t(object_id, name, kind);
          CREATE TABLE lake.src.event AS SELECT * FROM (VALUES (10, 1, 'x'), (11, 3, 'y')) t(id, entity_id, v);",
+        REPS,
+        PG,
     )
-    .expect("seed");
-    drop(c);
+    .await
+}
+
+async fn setup_with(pg: &'static Postgres, lake_sql: &str, reps: &str, pg_sql: &str) -> Env {
+    let lake = LocalLake::file().expect("lake");
+    lake.open("lake")
+        .expect("open")
+        .execute_batch(lake_sql)
+        .expect("seed");
     let db = pg.fresh_db().expect("db");
-    let opts = atlatl_conn_postgres::ConnectOptions::new(
+    let mut opts = atlatl_conn_postgres::ConnectOptions::new(
         &pg.host,
         pg.port,
         &db,
         &pg.user,
         Some(pg.password.clone()),
     );
-    let mut opts = opts;
     opts.sslmode = atlatl_core::config::model::SslMode::Disable;
     let conns = format!(
         "{}  app: {{type: postgres, host: {}, port: {}, database: {db}, user: {}, password: \"{}\", sslmode: disable}}\n",
@@ -92,22 +105,14 @@ async fn setup(pg: &'static Postgres) -> Env {
     );
     let project = TempProject::new()
         .and_then(|p| p.project(&conns, ""))
-        .and_then(|p| p.replication("serve", REPS))
+        .and_then(|p| p.replication("serve", reps))
         .expect("project");
     let e = Env {
         lake,
         project,
         pg: opts,
     };
-    pg_exec(
-        &e,
-        "CREATE SCHEMA dagster;
-         CREATE TYPE dagster.kind AS ENUM ('a', 'b');
-         CREATE TABLE dagster.entity (object_id bigint PRIMARY KEY, name text, kind dagster.kind, deleted_at timestamptz, inserted_at timestamptz DEFAULT now());
-         CREATE TABLE dagster.event (id bigint PRIMARY KEY, entity_id bigint REFERENCES dagster.entity (object_id), v text);
-         INSERT INTO dagster.entity (object_id, name, kind) VALUES (1, 'stale', 'a'), (99, 'gone', 'b');",
-    )
-    .await;
+    pg_exec(&e, pg_sql).await;
     e
 }
 
@@ -140,6 +145,10 @@ async fn go(e: &Env) -> RunReport {
 }
 
 async fn boot(e: &Env, dry_run: bool) -> serde_json::Value {
+    try_boot(e, dry_run).await.expect("bootstrap")
+}
+
+async fn try_boot(e: &Env, dry_run: bool) -> atlatl_core::error::Result<serde_json::Value> {
     let a = BootstrapArgs {
         replication: "serve".into(),
         env: None,
@@ -149,9 +158,7 @@ async fn boot(e: &Env, dry_run: bool) -> serde_json::Value {
         advance_cursor_only: false,
         extension_dir: Some(atlatl_testkit::extension_dir()),
     };
-    bootstrap_cmd(project(e), a, vars())
-        .await
-        .expect("bootstrap")
+    bootstrap_cmd(project(e), a, vars()).await
 }
 
 fn member<'a>(r: &'a RunReport, stream: &str) -> &'a MemberReport {
@@ -288,5 +295,49 @@ async fn bootstrap_then_serve_changes() {
     assert_eq!(
         go(&e).await.replications[0].status,
         ReplicationStatus::UpToDate
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adopt_compares_guarded_decimals_exactly() {
+    let e = setup_with(
+        atlatl_testkit::pg16(),
+        "CREATE SCHEMA lake.src;
+         CREATE TABLE lake.src.m AS SELECT * FROM (VALUES
+           (1::BIGINT, 12345678901234567.88::DECIMAL(20,2)), (2, 1.50)) t(id, amt);",
+        r#"replications:
+  serve:
+    source: lake
+    target: app
+    streams:
+      - id: s/m
+        mode: cdc
+        from: {table: src.m}
+        object: app.m
+        primary_key: [id]
+        columns: {include: [id, amt]}
+        deletes: {mode: hard}
+"#,
+        "CREATE SCHEMA app;
+         CREATE TABLE app.m (id bigint PRIMARY KEY, amt numeric(20,2));
+         INSERT INTO app.m VALUES (1, 12345678901234567.89), (2, 1.5);",
+    )
+    .await;
+
+    let d = boot(&e, true).await;
+    assert_eq!(d["streams"][0]["upserts"], 1, "past double precision: {d}");
+    let d = boot(&e, false).await;
+    assert_eq!(d["streams"][0]["rows_updated"], 1, "{d}");
+    assert_eq!(
+        pg_rows(&e, "SELECT amt::text FROM app.m ORDER BY id").await,
+        ["12345678901234567.88", "1.50"]
+    );
+
+    pg_exec(&e, "UPDATE app.m SET amt = 'NaN' WHERE id = 2;").await;
+    let err = try_boot(&e, true).await.expect_err("NaN sways adopt");
+    assert!(
+        err.to_string()
+            .contains("column `amt` of `app.m` holds NaN, which a decimal can't hold"),
+        "{err}"
     );
 }

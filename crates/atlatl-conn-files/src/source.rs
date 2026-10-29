@@ -2,10 +2,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use atlatl_core::config::model::{
-    ChunkBy, ChunkConfig, ColumnsConfig, CsvOptions, FileFormat, FilesConn, FilesSelector, Naming,
-    OnNoMatch, SftpConfig, StorageConfig, StreamConfig,
+    CAST_NULLED, ChunkBy, ChunkConfig, ColumnsConfig, CsvOptions, FileFormat, FilesConn,
+    FilesSelector, Naming, OnNoMatch, SftpConfig, StorageConfig, StreamConfig,
 };
 use atlatl_core::error::{AtlatlError, ErrorClass, Result};
+use atlatl_ingest::drift;
 use atlatl_ingest::sql::{ident, literal};
 use atlatl_ingest::staging::{self, Column};
 use duckdb::Connection;
@@ -34,6 +35,8 @@ pub struct FilesRead {
     pub manifest: bool,
     /// Adds `k=v` path segments as columns.
     pub hive_partitioning: bool,
+    /// `on_cast_error.set_null`: a declared column's value that doesn't fit reads as NULL.
+    pub set_null: bool,
 }
 
 impl FilesRead {
@@ -48,6 +51,7 @@ impl FilesRead {
             on_no_match: OnNoMatch::Error,
             manifest: false,
             hive_partitioning: false,
+            set_null: false,
         }
     }
 
@@ -69,6 +73,7 @@ impl FilesRead {
         r.on_no_match = from.on_no_match.unwrap_or(OnNoMatch::Error);
         r.manifest = r.selector.manifest.unwrap_or(false);
         r.hive_partitioning = r.selector.hive_partitioning.unwrap_or(false);
+        r.set_null = stream.set_null();
         Ok(r)
     }
 }
@@ -423,6 +428,7 @@ impl FilesSource {
             source: Vec::new(),
             aliases: Vec::new(),
             declared: Vec::new(),
+            set_null: self.read.set_null,
         };
         if fs.files.is_empty() {
             return Ok(fs);
@@ -688,6 +694,7 @@ pub struct FileSet {
     aliases: Vec<String>,
     /// (source index, DuckDB type) for declared `columns.<c>.type`.
     declared: Vec<(usize, String)>,
+    set_null: bool,
 }
 
 /// One `chunk: {by: files}` group.
@@ -735,6 +742,30 @@ impl FileSet {
         self.select_for(&self.files)
     }
 
+    /// The staged names of declared columns whose values that don't fit read as NULL, each
+    /// flagged in a [`CAST_NULLED`] column (`on_cast_error.set_null`).
+    pub fn nulled(&self) -> Vec<String> {
+        if !self.set_null {
+            return Vec::new();
+        }
+        (0..self.source.len())
+            .filter(|&i| self.declared(i).is_some_and(|(from, t)| from != t))
+            .map(|i| self.aliases[i].clone())
+            .collect()
+    }
+
+    /// A declared column's (read type, declared type).
+    fn declared(&self, i: usize) -> Option<(&str, &str)> {
+        let (_, t) = self.declared.iter().find(|(j, _)| *j == i)?;
+        let col = &self.source[i];
+        let from = if self.format == FileFormat::Parquet && !self.hive_keys.contains(&col.name) {
+            col.kind.as_str()
+        } else {
+            "VARCHAR"
+        };
+        Some((from, t.as_str()))
+    }
+
     /// Stages every file into `CREATE TEMP TABLE <name>`; returns the row count.
     pub fn stage(&self, c: &Connection, name: &str) -> Result<u64> {
         let n = staging::stage_query(c, name, &self.select()?).map_err(reclassify)?;
@@ -777,35 +808,43 @@ impl FileSet {
         if files.is_empty() {
             return Err(AtlatlError::config("no files to read"));
         }
+        let mut flags = Vec::new();
         let projection: Vec<String> = self
             .source
             .iter()
             .enumerate()
             .map(|(i, col)| {
                 let src = ident(&col.name);
-                let expr = match self.declared.iter().find(|(j, _)| *j == i) {
-                    Some((_, t)) if self.cast_in_select(&col.name) => {
-                        format!("CAST({src} AS {t})")
-                    }
-                    _ => src.clone(),
-                };
                 let alias = &self.aliases[i];
+                let expr = match self.declared(i) {
+                    Some((from, t)) if self.set_null => {
+                        let (e, flag) = drift::nulling_cast(&src, from, t);
+                        if let Some(f) = flag {
+                            flags.push(format!(
+                                "{f} AS {}",
+                                ident(&format!("{CAST_NULLED}{alias}"))
+                            ));
+                        }
+                        e
+                    }
+                    Some((from, t)) => drift::exact_cast(&src, from, t, alias),
+                    None => src.clone(),
+                };
                 if expr == src && *alias == col.name {
                     src
                 } else {
                     format!("{expr} AS {}", ident(alias))
                 }
             })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .chain(flags)
             .collect();
         Ok(format!(
             "SELECT {} FROM {}",
             projection.join(", "),
             self.reader(files, Phase::Read)
         ))
-    }
-
-    fn cast_in_select(&self, col: &str) -> bool {
-        self.format == FileFormat::Parquet || self.hive_keys.iter().any(|k| k == col)
     }
 
     fn reader(&self, files: &[FileEntry], phase: Phase) -> String {
@@ -849,15 +888,6 @@ impl FileSet {
                     opts.push(format!("encoding={}", literal(e)));
                 }
                 if phase == Phase::Read {
-                    let types: Vec<String> = self
-                        .declared
-                        .iter()
-                        .filter(|(i, _)| !hive(&self.source[*i]))
-                        .map(|(i, t)| format!("{}: {}", literal(&self.source[*i].name), literal(t)))
-                        .collect();
-                    if !types.is_empty() {
-                        opts.push(format!("types={{{}}}", types.join(", ")));
-                    }
                     if c.null_values.is_empty() {
                         let cols: Vec<String> = self
                             .source
@@ -884,17 +914,8 @@ impl FileSet {
                     let cols: Vec<String> = self
                         .source
                         .iter()
-                        .enumerate()
-                        .filter(|(_, c)| !hive(c))
-                        .map(|(i, c)| {
-                            let t = self
-                                .declared
-                                .iter()
-                                .find(|(j, _)| *j == i)
-                                .map(|(_, t)| t.as_str())
-                                .unwrap_or("VARCHAR");
-                            format!("{}: {}", literal(&c.name), literal(t))
-                        })
+                        .filter(|c| !hive(c))
+                        .map(|c| format!("{}: 'VARCHAR'", literal(&c.name)))
                         .collect();
                     opts.push(format!("columns={{{}}}", cols.join(", ")));
                 }
@@ -998,7 +1019,8 @@ impl FileSet {
                 if let Some(i) = idx
                     && !(is_text(t) && self.format != FileFormat::Parquet)
                 {
-                    self.declared.push((i, t.to_owned()));
+                    self.declared
+                        .push((i, drift::canonical(c, t).map_err(reclassify)?));
                 }
             }
         }

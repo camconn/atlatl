@@ -11,7 +11,7 @@ use super::de::Raw;
 use super::de::{Spanned, from_node};
 use super::diag::{ConfigError, Diagnostics, SourceMap};
 use super::model::{
-    EngineConfig, EngineOverrides, EnvironmentsConfig, ForEachConfig, HopConfig, ProjectFile,
+    EngineConfig, EngineOverrides, EnvironmentsConfig, ForEachConfig, HopConfig, Mode, ProjectFile,
     ReplicationConfig, ReplicationsFile, RetryConfig, SchemaFile, SourceSchema, SourceSnapshot,
     StateConfig, StreamConfig,
 };
@@ -516,7 +516,13 @@ fn build_replication(
                 .at(name.span.clone()),
         );
     }
-    build_streams(&cfg.streams, ok.then_some(&base), 0, &mut streams, diags);
+    build_streams(
+        &cfg.streams,
+        ok.then_some((&base, cfg.defaults.as_ref().map(|d| &d.node))),
+        0,
+        &mut streams,
+        diags,
+    );
     let mut hops = vec![Hop {
         parent: None,
         source: cfg.source.clone(),
@@ -547,26 +553,46 @@ fn build_replication(
     })
 }
 
-/// Streams merged over `base` (`None`: the defaults were invalid and already reported).
+/// Streams merged over `base` (`None`: the defaults were invalid and already reported), with
+/// `own` the hop's own `defaults`. A cdc stream drops ingest-only keys set only above `own`.
 fn build_streams(
     raws: &[Raw<StreamConfig>],
-    base: Option<&Node>,
+    base: Option<(&Node, Option<&Node>)>,
     hop: usize,
     out: &mut Vec<Stream>,
     diags: &mut Diagnostics,
 ) {
+    let set = |n: Option<&Node>, k: &str| n.and_then(|n| n.get(k)).is_some_and(|v| !v.is_null());
     for raw in raws {
-        let node = match base {
-            Some(b) => merge(b, &raw.node),
+        let mut node = match base {
+            Some((b, _)) => merge(b, &raw.node),
             None => raw.node.clone(),
         };
-        let config = match from_node::<StreamConfig>(&node) {
+        let mut config = match from_node::<StreamConfig>(&node) {
             Ok(c) => c,
             Err(e) => {
                 diags.error("stream", e);
                 continue;
             }
         };
+        if let Some((_, own)) = base
+            && config.mode.as_ref().map(|m| m.value) == Some(Mode::Cdc)
+        {
+            let inherited: Vec<&str> = StreamConfig::INGEST_ONLY
+                .into_iter()
+                .filter(|k| set(Some(&node), k) && !set(Some(&raw.node), k) && !set(own, k))
+                .collect();
+            if !inherited.is_empty() {
+                node = node.take_keys(&inherited).0;
+                config = match from_node::<StreamConfig>(&node) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        diags.error("stream", e);
+                        continue;
+                    }
+                };
+            }
+        }
         let Some(id) = config.id.clone() else {
             diags.error(
                 "stream-id",
@@ -645,7 +671,13 @@ fn build_hops(
             );
             base = merge(&base, &d.node);
         }
-        build_streams(&cfg.streams, ok.then_some(&base), idx, streams, diags);
+        build_streams(
+            &cfg.streams,
+            ok.then_some((&base, cfg.defaults.as_ref().map(|d| &d.node))),
+            idx,
+            streams,
+            diags,
+        );
         if let Some(then) = &cfg.then {
             build_hops(then, idx, shorthand, hops, streams, diags);
         }

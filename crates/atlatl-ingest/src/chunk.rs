@@ -1,7 +1,9 @@
 //! Chunk relations (04 §7). Each chunk is a predicate over the pinned source, merged directly
 //! inside the replication's transaction (never staged into a TEMP table there; spike S3 §4).
 
-use atlatl_core::config::model::{ChunkBy, ChunkConfig, Duplicates, Guard, NullKeys, OnEmpty};
+use atlatl_core::config::model::{
+    CAST_NULLED, ChunkBy, ChunkConfig, Duplicates, Guard, NullKeys, OnEmpty,
+};
 use atlatl_core::error::{AtlatlError, ErrorClass, Result};
 use duckdb::Connection;
 
@@ -177,7 +179,15 @@ impl Unstaged<'_> {
                 "`duplicates: first|last` needs a staged set; it can't be combined with `chunk`",
             ));
         }
-        if self.set_null && a.columns.iter().any(|col| col.cast) {
+        if self.set_null
+            && a.columns.iter().any(|col| {
+                col.cast
+                    || col
+                        .source
+                        .as_deref()
+                        .is_some_and(|n| n.starts_with(CAST_NULLED))
+            })
+        {
             return Err(AtlatlError::config(
                 "`on_cast_error.set_null` needs a staged set; it can't be combined with `chunk`",
             ));
@@ -366,6 +376,22 @@ mod tests {
         .check(&c, "src", &a)
         .expect_err("last");
         assert_eq!(e.class, ErrorClass::Config);
+        let flagged = Adoption {
+            columns: vec![crate::drift::ColumnPlan {
+                target: format!("{CAST_NULLED}v"),
+                source: Some(format!("{CAST_NULLED}v")),
+                from: "BOOLEAN".into(),
+                kind: "BOOLEAN".into(),
+                cast: false,
+            }],
+            ..Default::default()
+        };
+        let set_null = Unstaged {
+            set_null: true,
+            ..base.clone()
+        };
+        let e = set_null.check(&c, "src", &flagged).expect_err("flags");
+        assert_eq!(e.class, ErrorClass::Config, "{e}");
 
         c.execute_batch("DELETE FROM src WHERE v = 'b2'")
             .expect("dedupe");

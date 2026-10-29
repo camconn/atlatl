@@ -1,12 +1,14 @@
 //! Adoption of existing tables and table drift (04 §6). The target schema is authoritative: its
 //! columns, order and types. Staged values are cast into it and checked value by value.
 
-use atlatl_core::config::model::{MissingColumns, NewColumns, TableDrift, TypeChanges};
+use atlatl_core::config::model::{
+    CAST_NULLED, MissingColumns, NewColumns, TableDrift, TypeChanges,
+};
 use atlatl_core::error::{AtlatlError, Result};
 use duckdb::Connection;
 use indexmap::IndexMap;
 
-use crate::sql::{db, ident, literal};
+use crate::sql::{CAST_FAILED, db, ident, literal};
 use crate::staging::{Column, quoted_relation};
 use crate::validate::MAX_SAMPLES;
 
@@ -34,6 +36,8 @@ pub struct ColumnPlan {
     pub target: String,
     /// Staged column feeding it; `None` leaves it NULL on insert and untouched on update.
     pub source: Option<String>,
+    /// The staged type (the target's own when there's no source).
+    pub from: String,
     pub kind: String,
     pub cast: bool,
 }
@@ -130,6 +134,7 @@ pub fn plan(
                 ColumnPlan {
                     target: c.name.clone(),
                     source: Some(c.name.clone()),
+                    from: c.kind.clone(),
                     cast: kind != c.kind,
                     kind,
                 }
@@ -159,6 +164,7 @@ pub fn plan(
                 a.columns.push(ColumnPlan {
                     target: t.name.clone(),
                     source: Some(s.name.clone()),
+                    from: s.kind.clone(),
                     cast: s.kind != kind,
                     kind,
                 });
@@ -168,6 +174,7 @@ pub fn plan(
                 a.columns.push(ColumnPlan {
                     target: t.name.clone(),
                     source: None,
+                    from: t.kind.clone(),
                     kind: t.kind.clone(),
                     cast: false,
                 });
@@ -214,6 +221,7 @@ pub fn plan(
                     a.columns.push(ColumnPlan {
                         target: c.name.clone(),
                         source: Some(c.name.clone()),
+                        from: c.kind.clone(),
                         cast: kind != c.kind,
                         kind,
                     });
@@ -270,16 +278,166 @@ pub fn projection(a: &Adoption) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Rows whose non-NULL value doesn't survive the cast into the target type. With `set_null`
-/// they become NULL with a counted warning; otherwise it's a `data` error with samples (04 §5.1).
+fn unsigned(t: &str) -> bool {
+    matches!(
+        t,
+        "UTINYINT" | "USMALLINT" | "UINTEGER" | "UBIGINT" | "UHUGEINT"
+    )
+}
+
+fn float(t: &str) -> bool {
+    matches!(t, "FLOAT" | "DOUBLE")
+}
+
+/// Fraction digits a temporal type keeps.
+fn temporal(t: &str) -> Option<usize> {
+    Some(match t {
+        "DATE" | "TIMESTAMP_S" => 0,
+        "TIMESTAMP_MS" => 3,
+        "TIMESTAMP" | "TIMESTAMP WITH TIME ZONE" | "TIME" => 6,
+        "TIMESTAMP_NS" => 9,
+        _ => return None,
+    })
+}
+
+/// A space-padded decimal numeral with optional exponent as exact `[-]digits'e'exp` text (digits
+/// without leading or trailing zeros, `0` for zero); NULL for anything else, hex, binary and
+/// digit separators included.
+fn numeral(e: &str) -> String {
+    let t = format!("trim({e})");
+    let part = |n: u8| {
+        format!(r"regexp_extract({t}, '^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$', {n})")
+    };
+    let (sign, frac, exp) = (part(1), part(3), part(4));
+    let lead = format!("ltrim({} || {frac}, '0')", part(2));
+    let digits = format!("rtrim({lead}, '0')");
+    format!(
+        r"CASE WHEN NOT regexp_matches({t}, '^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$') THEN NULL
+         WHEN {digits} = '' THEN '0'
+         ELSE CASE {sign} WHEN '-' THEN '-' ELSE '' END || {digits} || 'e' ||
+           (TRY_CAST(coalesce(nullif({exp}, ''), '0') AS BIGINT)::HUGEINT - length({frac})
+            + length({lead}) - length({digits})) END"
+    )
+}
+
+/// True where a non-NULL `s` of type `from` would land in `to` other than exactly: it's
+/// rounded, truncated, re-zoned, or doesn't cast at all. Widenings and anything → text are
+/// free; anything → float accepts precision loss and refuses only overflow to infinity.
+fn lossy(s: &str, from: &str, to: &str) -> String {
+    let landed = format!("TRY_CAST({s} AS {to})");
+    let base = format!("{landed} IS NULL");
+    let exact = if matches!(to, "VARCHAR" | "JSON") || is_widening(from, to) {
+        None
+    } else if float(to) {
+        (!float(from)).then(|| {
+            format!("isinf({landed}) AND NOT regexp_matches(CAST({s} AS VARCHAR), '(?i)inf')")
+        })
+    } else if from == "VARCHAR" {
+        if int_rank(to).is_some() || unsigned(to) || decimal(to).is_some() {
+            Some(format!(
+                "{} IS DISTINCT FROM {}",
+                numeral(s),
+                numeral(&format!("CAST({landed} AS VARCHAR)"))
+            ))
+        } else if let Some(digits) = temporal(to) {
+            let frac = format!(r"regexp_matches({s}, ':\d\d\.\d{{{digits}}}\d*[1-9]')");
+            Some(match to {
+                "TIME" | "TIMESTAMP WITH TIME ZONE" => frac,
+                _ => format!(
+                    "{frac} OR TRY_CAST({s} AS TIMESTAMPTZ) <> CAST({landed} AS TIMESTAMPTZ)"
+                ),
+            })
+        } else {
+            None
+        }
+    } else {
+        Some(format!("TRY_CAST({landed} AS {from}) IS DISTINCT FROM {s}"))
+    };
+    match exact {
+        Some(e) => format!("{s} IS NOT NULL AND ({base} OR {e})"),
+        None => format!("{s} IS NOT NULL AND {base}"),
+    }
+}
+
+const WIDER: &str = "Declare a wider type or convert in `from.query`";
+
+/// `kind` as DuckDB spells it (`numeric(10,2)` → `DECIMAL(10,2)`).
+pub fn canonical(c: &Connection, kind: &str) -> Result<String> {
+    c.query_row(&format!("SELECT typeof(CAST(NULL AS {kind}))"), [], |r| {
+        r.get(0)
+    })
+    .map_err(db)
+}
+
+/// `CAST(e AS to)` for a value of type `from`, raising a `cast_failed` data error rather than
+/// landing it inexactly (see [`lossy`]). `to` is canonical.
+pub fn exact_cast(e: &str, from: &str, to: &str, column: &str) -> String {
+    if from == to {
+        return e.to_owned();
+    }
+    format!(
+        "CASE WHEN {} THEN error(concat({}, {e}::VARCHAR, {})) ELSE CAST({e} AS {to}) END",
+        lossy(e, from, to),
+        literal(&format!(
+            "{CAST_FAILED}a value doesn't fit its declared type exactly; it'd fail to cast, round or truncate (`{column}` \""
+        )),
+        literal(&format!("\" as {to}). {WIDER}")),
+    )
+}
+
+/// [`exact_cast`] under `on_cast_error.set_null`: NULL where it would raise, and the predicate
+/// flagging those (`None` when nothing can be nulled).
+pub fn nulling_cast(e: &str, from: &str, to: &str) -> (String, Option<String>) {
+    if from == to {
+        return (e.to_owned(), None);
+    }
+    let bad = lossy(e, from, to);
+    (
+        format!("CASE WHEN {bad} THEN NULL ELSE CAST({e} AS {to}) END"),
+        Some(bad),
+    )
+}
+
+/// Counts the values a source read as NULL under `on_cast_error.set_null` (its
+/// [`CAST_NULLED`] flag columns in the staged table `stg`) and drops the flags.
+pub fn take_nulled(c: &Connection, stg: &str) -> Result<u64> {
+    let flags: Vec<String> = crate::staging::describe(c, stg)?
+        .into_iter()
+        .map(|col| col.name)
+        .filter(|n| n.starts_with(CAST_NULLED))
+        .collect();
+    if flags.is_empty() {
+        return Ok(0);
+    }
+    let rel = quoted_relation(stg);
+    let sum = flags
+        .iter()
+        .map(|f| format!("count(*) FILTER (WHERE {})", ident(f)))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let n: i64 = c
+        .query_row(&format!("SELECT {sum} FROM {rel}"), [], |r| r.get(0))
+        .map_err(db)?;
+    for f in &flags {
+        c.execute_batch(&format!("ALTER TABLE {rel} DROP COLUMN {}", ident(f)))
+            .map_err(db)?;
+    }
+    Ok(n as u64)
+}
+
+/// Rows whose non-NULL value doesn't land exactly in the target type (see [`lossy`]). With
+/// `set_null` they become NULL with a counted warning; otherwise it's a `data` error with samples
+/// (04 §5.1).
 pub fn check_casts(c: &Connection, stg: &str, a: &Adoption, set_null: bool) -> Result<u64> {
     let rel = quoted_relation(stg);
     let mut total = 0u64;
     let mut samples = Vec::new();
+    let mut first = Vec::new();
     for col in a.columns.iter().filter(|c| c.cast) {
         let Some(src) = &col.source else { continue };
         let s = ident(src);
-        let pred = format!("{s} IS NOT NULL AND TRY_CAST({s} AS {}) IS NULL", col.kind);
+        let to = canonical(c, &col.kind)?;
+        let pred = lossy(&s, &col.from, &to);
         let n: i64 = c
             .query_row(
                 &format!("SELECT count(*) FROM {rel} WHERE {pred}"),
@@ -302,6 +460,9 @@ pub fn check_casts(c: &Connection, stg: &str, a: &Adoption, set_null: bool) -> R
             .map_err(db)?
             .collect::<Result<_, _>>()
             .map_err(db)?;
+        if let Some(v) = vals.first() {
+            first.push(format!("`{}` {v:?} as {}", col.target, col.kind));
+        }
         for v in vals {
             samples.push(serde_json::json!({"column": col.target, "type": col.kind, "value": v}));
         }
@@ -311,11 +472,12 @@ pub fn check_casts(c: &Connection, stg: &str, a: &Adoption, set_null: bool) -> R
         }
     }
     if total > 0 && !set_null {
-        return Err(
-            AtlatlError::data(format!("{total} values don't cast into the target types"))
-                .code("cast_failed")
-                .samples(samples),
-        );
+        return Err(AtlatlError::data(format!(
+            "{total} values don't fit their target types exactly; they'd fail to cast, round or truncate (e.g. {}). {WIDER}",
+            first.join(", ")
+        ))
+        .code("cast_failed")
+        .samples(samples));
     }
     Ok(total)
 }
@@ -528,5 +690,312 @@ mod tests {
         );
         assert_eq!(check_casts(&c, "stg", &a, true).expect("set null"), 2);
         assert_eq!(check_casts(&c, "stg", &a, false).expect("clean"), 0);
+    }
+
+    fn declared_cast(from: &str, value: &str, to: &str) -> Result<u64> {
+        let c = Connection::open_in_memory().expect("db");
+        c.execute_batch("SET TimeZone = 'UTC'").expect("tz");
+        crate::staging::stage_query(&c, "stg", &format!("SELECT CAST({value} AS {from}) AS v"))
+            .expect("stage");
+        let staged = crate::staging::describe(&c, "stg").expect("describe");
+        let d: Declared = [("v".to_owned(), to.to_owned())].into_iter().collect();
+        let a = plan(&staged, None, Policy::from(None), &d).expect("plan");
+        check_casts(&c, "stg", &a, false)
+    }
+
+    #[test]
+    fn declared_casts_land_exactly_or_fail() {
+        let cases = [
+            ("DECIMAL(20,4)", "12345.6789", "DECIMAL(10,2)", false),
+            ("DECIMAL(20,4)", "12345.67", "DECIMAL(10,2)", true),
+            ("DECIMAL(20,4)", "123456789.67", "DECIMAL(10,2)", false),
+            ("DECIMAL(20,4)", "-0.005", "numeric(10,2)", false),
+            ("DECIMAL(20,4)", "12345.6789", "DOUBLE", true),
+            ("DECIMAL(38,2)", "12345678901234567.89", "DOUBLE", true),
+            ("DECIMAL(38,10)", "0.1000000001", "DOUBLE", true),
+            ("DECIMAL(38,10)", "0.1000000001", "FLOAT", true),
+            (
+                "DECIMAL(38,0)",
+                "99999999999999999999999999999999999999",
+                "FLOAT",
+                true,
+            ),
+            ("BIGINT", "3000000000", "INTEGER", false),
+            ("BIGINT", "-42", "int", true),
+            ("BIGINT", "9007199254740993", "DOUBLE", true),
+            ("BIGINT", "16777217", "FLOAT", true),
+            (
+                "HUGEINT",
+                "170141183460469231731687303715884105727",
+                "FLOAT",
+                true,
+            ),
+            (
+                "UHUGEINT",
+                "340282366920938463463374607431768211455",
+                "FLOAT",
+                false,
+            ),
+            ("BOOLEAN", "true", "DOUBLE", true),
+            ("DATE", "'2024-01-02'", "DOUBLE", false),
+            ("JSON", "'1e40'", "FLOAT", false),
+            ("JSON", "'\"inf\"'", "FLOAT", true),
+            ("INTEGER", "2147483647", "BIGINT", true),
+            ("INTEGER", "2", "BOOLEAN", false),
+            ("INTEGER", "1", "BOOLEAN", true),
+            ("DOUBLE", "1.5", "BIGINT", false),
+            ("DOUBLE", "2.0", "BIGINT", true),
+            ("DOUBLE", "12345.6789", "DECIMAL(10,2)", false),
+            ("DOUBLE", "0.1", "DECIMAL(10,2)", true),
+            ("DOUBLE", "0.1", "FLOAT", true),
+            ("DOUBLE", "1e40", "FLOAT", false),
+            ("DOUBLE", "'inf'", "FLOAT", true),
+            ("DOUBLE", "'nan'", "FLOAT", true),
+            ("DOUBLE", "0.1000000001", "FLOAT", true),
+            ("VARCHAR", "'1.5'", "BIGINT", false),
+            ("VARCHAR", "'15'", "BIGINT", true),
+            ("VARCHAR", "' +015 '", "BIGINT", true),
+            ("VARCHAR", "'15.000'", "BIGINT", true),
+            ("VARCHAR", "'-0'", "BIGINT", true),
+            ("VARCHAR", "'x'", "BIGINT", false),
+            ("VARCHAR", "'12345.6789'", "DECIMAL(10,2)", false),
+            ("VARCHAR", "'12345.6'", "DECIMAL(10,2)", true),
+            ("VARCHAR", "'-.5'", "DECIMAL(10,2)", true),
+            ("VARCHAR", "'0.1'", "DOUBLE", true),
+            ("VARCHAR", "'1e40'", "FLOAT", false),
+            ("VARCHAR", "'-Infinity'", "FLOAT", true),
+            ("VARCHAR", "'yes'", "BOOLEAN", true),
+            ("VARCHAR", "'maybe'", "BOOLEAN", false),
+            ("VARCHAR", "'2024-01-02'", "DATE", true),
+            ("VARCHAR", "'2024-01-02 00:00:00'", "DATE", true),
+            ("VARCHAR", "'2024-01-02 03:04:05'", "DATE", false),
+            ("VARCHAR", "'2024-01-02 03:04:05.123456'", "TIMESTAMP", true),
+            (
+                "VARCHAR",
+                "'2024-01-02 03:04:05.1234560'",
+                "TIMESTAMP",
+                true,
+            ),
+            (
+                "VARCHAR",
+                "'2024-01-02 03:04:05.1234567'",
+                "TIMESTAMP",
+                false,
+            ),
+            (
+                "VARCHAR",
+                "'2024-01-02 03:04:05.1234567'",
+                "TIMESTAMPTZ",
+                false,
+            ),
+            (
+                "VARCHAR",
+                "'2024-01-02 03:04:05.1234567'",
+                "TIMESTAMP_NS",
+                true,
+            ),
+            ("VARCHAR", "'2024-01-02T03:04:05+02'", "TIMESTAMP", false),
+            ("VARCHAR", "'2024-01-02T03:04:05Z'", "TIMESTAMP", true),
+            ("VARCHAR", "'2024-01-02T03:04:05+02'", "TIMESTAMPTZ", true),
+            ("VARCHAR", "'12:34:56.1234567'", "TIME", false),
+            ("TIMESTAMP", "'2024-01-02 03:04:05'", "DATE", false),
+            ("TIMESTAMP", "'2024-01-02 00:00:00'", "DATE", true),
+            (
+                "TIMESTAMP_NS",
+                "'2024-01-02 03:04:05.123456789'",
+                "TIMESTAMP",
+                false,
+            ),
+            (
+                "TIMESTAMP_NS",
+                "'2024-01-02 03:04:05.123456'",
+                "TIMESTAMP",
+                true,
+            ),
+            ("TIMESTAMPTZ", "'2024-01-02 03:04:05+02'", "TIMESTAMP", true),
+            ("DATE", "'2024-01-02'", "TIMESTAMP", true),
+            ("DOUBLE", "0.1", "VARCHAR", true),
+            ("DECIMAL(20,4)", "NULL", "DECIMAL(10,2)", true),
+            ("VARCHAR", "NULL", "BIGINT", true),
+        ];
+        for (from, value, to, fits) in cases {
+            let r = declared_cast(from, value, to);
+            match (fits, r) {
+                (true, Ok(0)) => {}
+                (false, Err(e)) => {
+                    assert_eq!(
+                        (e.class, e.code.as_deref(), e.samples.len()),
+                        (ErrorClass::Data, Some("cast_failed"), 1),
+                        "{from} {value} as {to}"
+                    );
+                }
+                (_, r) => panic!("{from} {value} as {to}: {r:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn narrowing_errors_name_the_column_value_and_type() {
+        let e = declared_cast("DECIMAL(20,4)", "12345.6789", "DECIMAL(10,2)").expect_err("lossy");
+        assert_eq!(
+            e.message,
+            "1 values don't fit their target types exactly; they'd fail to cast, round or truncate (e.g. `v` \"12345.6789\" as DECIMAL(10,2)). Declare a wider type or convert in `from.query`"
+        );
+        assert_eq!(
+            e.samples[0],
+            serde_json::json!({"column": "v", "type": "DECIMAL(10,2)", "value": "12345.6789"})
+        );
+    }
+
+    #[test]
+    fn adopted_columns_are_exact_too() {
+        let c = Connection::open_in_memory().expect("db");
+        crate::staging::stage_query(
+            &c,
+            "stg",
+            "SELECT * FROM (VALUES (12345.67::DECIMAL(20,4), 7::BIGINT), (12345.6789, 3000000000), (NULL, NULL)) t(amt, n)",
+        )
+        .expect("stage");
+        let staged = crate::staging::describe(&c, "stg").expect("describe");
+        let target = [col("amt", "DECIMAL(10,2)"), col("n", "INTEGER")];
+        let a = plan(&staged, Some(&target), Policy::from(None), &Declared::new()).expect("plan");
+        let e = check_casts(&c, "stg", &a, false).expect_err("lossy");
+        assert_eq!(e.samples.len(), 2);
+        assert_eq!(check_casts(&c, "stg", &a, true).expect("set null"), 2);
+        let landed: String = c
+            .query_row(
+                &format!(
+                    "SELECT string_agg(concat_ws('|', {}), ',') FROM stg",
+                    projection(&a)
+                        .into_iter()
+                        .map(|(_, e)| e)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .expect("land");
+        assert_eq!(landed, "12345.67|7,,");
+    }
+
+    #[test]
+    fn exact_casts_raise_inline() {
+        let c = Connection::open_in_memory().expect("db");
+        let to = canonical(&c, "numeric(10,2)").expect("canonical");
+        assert_eq!(to, "DECIMAL(10,2)");
+        assert_eq!(exact_cast("\"v\"", &to, &to, "v"), "\"v\"");
+        let land = |v: &str| {
+            c.query_row(
+                &format!(
+                    "SELECT {}::VARCHAR FROM (SELECT {v} AS v)",
+                    exact_cast("\"v\"", "VARCHAR", &to, "amt")
+                ),
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .map_err(db)
+        };
+        assert_eq!(
+            land("'12345.6'").expect("fits").as_deref(),
+            Some("12345.60")
+        );
+        assert_eq!(land("NULL::VARCHAR").expect("null"), None);
+        let e = land("'12345.6789'").expect_err("rounds");
+        assert_eq!(
+            (e.class, e.code.as_deref(), e.message.as_str()),
+            (
+                ErrorClass::Data,
+                Some("cast_failed"),
+                "a value doesn't fit its declared type exactly; it'd fail to cast, round or truncate (`amt` \"12345.6789\" as DECIMAL(10,2)). Declare a wider type or convert in `from.query`"
+            )
+        );
+        assert_eq!(
+            canonical(&c, "nope").expect_err("unknown").class,
+            ErrorClass::Config
+        );
+    }
+
+    #[test]
+    fn nulling_casts_flag_what_they_null() {
+        let c = Connection::open_in_memory().expect("db");
+        assert_eq!(
+            nulling_cast("\"v\"", "DECIMAL(10,2)", "DECIMAL(10,2)"),
+            ("\"v\"".to_owned(), None)
+        );
+        let (e, flag) = nulling_cast("v", "VARCHAR", "DECIMAL(10,2)");
+        let flag = flag.expect("flag");
+        c.execute_batch(&format!(
+            "CREATE TEMP TABLE stg AS SELECT id, {e} AS v, {flag} AS {} FROM (VALUES (1, '12345.6789'), (2, '12.50'), (3, NULL), (4, 'x')) t(id, v)",
+            ident(&format!("{CAST_NULLED}v"))
+        ))
+        .expect("stage");
+        assert_eq!(take_nulled(&c, "stg").expect("take"), 2);
+        let cols = crate::staging::describe(&c, "stg").expect("cols");
+        assert_eq!(
+            cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["id", "v"]
+        );
+        let landed: String = c
+            .query_row(
+                "SELECT string_agg(coalesce(v::VARCHAR, '-'), ',' ORDER BY id) FROM stg",
+                [],
+                |r| r.get(0),
+            )
+            .expect("landed");
+        assert_eq!(landed, "-,12.50,-,-");
+        assert_eq!(take_nulled(&c, "stg").expect("none"), 0);
+    }
+
+    #[test]
+    fn varchar_numerals_land_exactly() {
+        let c = Connection::open_in_memory().expect("db");
+        let inexact = |v: &str, to: &str| -> bool {
+            c.query_row(
+                &format!(
+                    "SELECT coalesce({}, false) FROM (SELECT {} AS v)",
+                    lossy("v", "VARCHAR", to),
+                    literal(v)
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .expect(v)
+        };
+        for (v, to) in [
+            ("1e2", "INTEGER"),
+            ("1E+2", "BIGINT"),
+            ("1.5e1", "DECIMAL(4,2)"),
+            (".5e1", "INTEGER"),
+            ("1e-2", "DECIMAL(10,2)"),
+            ("150e-2", "DECIMAL(10,1)"),
+            ("1e2", "TINYINT"),
+            ("-0e5", "INTEGER"),
+            (" 12 ", "INTEGER"),
+            ("+12", "UBIGINT"),
+            ("-007.50", "DECIMAL(4,2)"),
+            ("5.", "INTEGER"),
+        ] {
+            assert!(!inexact(v, to), "{v} as {to} is exact");
+        }
+        for (v, to) in [
+            ("1.25e-1", "DECIMAL(10,2)"),
+            ("1e3", "TINYINT"),
+            ("1.5", "INTEGER"),
+            ("1e400", "DECIMAL(38,0)"),
+            ("1e400", "HUGEINT"),
+            ("1e99999999999999999999", "DECIMAL(38,0)"),
+            ("0x10", "INTEGER"),
+            ("0b11", "INTEGER"),
+            ("1_000", "INTEGER"),
+            ("1_000", "DECIMAL(10,2)"),
+            ("\t12", "INTEGER"),
+            ("- 12", "INTEGER"),
+            ("12abc", "INTEGER"),
+            ("e2", "INTEGER"),
+            (".", "INTEGER"),
+        ] {
+            assert!(inexact(v, to), "{v} as {to} is lossy");
+        }
     }
 }

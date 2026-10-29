@@ -541,6 +541,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-platform-verifier",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-postgres",

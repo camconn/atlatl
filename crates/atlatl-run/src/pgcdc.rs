@@ -32,6 +32,26 @@ fn cursor_json(lsn: Option<Lsn>, slot: &str) -> Option<serde_json::Value> {
     lsn.map(|l| serde_json::json!({"lsn": l.to_string(), "slot": slot}))
 }
 
+/// The columns [`run_unit`] would refuse, `(table, line)`, from the source catalog alone: no slot
+/// or publication is touched.
+pub async fn refused(
+    project: &Project,
+    rep: &ReplicationPlan,
+    env: Option<&str>,
+    vars: Arc<dyn EnvSource>,
+) -> Result<Vec<(String, String)>> {
+    let project_rep = project.replication(&rep.name).ok_or_else(|| {
+        AtlatlError::internal(format!("replication `{}` not in project", rep.name))
+    })?;
+    let conn = crate::runtime::resolve_connection(project, &rep.source.name, env, vars)?;
+    let base = base_env(project);
+    let resolved = config::resolve(project_rep, &conn, env, base.as_deref())?;
+    let mut src = PgChangeSource::open(resolved.opts, resolved.policy, resolved.spec).await?;
+    let bad = src.refused().await;
+    src.close().await?;
+    bad
+}
+
 pub async fn run_unit(
     rt: &Runtime,
     unit: &[&ReplicationPlan],

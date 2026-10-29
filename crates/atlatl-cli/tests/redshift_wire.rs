@@ -886,6 +886,79 @@ async fn incremental_writes_reach_postgres_sqlite_and_turso() {
     ingest_and_serve_incrementally(&src).await;
 }
 
+/// A `super` column on the stand-in: a `super` domain over `jsonb` that the catalog reports as
+/// `super`, and a `json_serialize` for the rendered select. `jsonb`'s binary format carries a
+/// version byte, so the value only lands as clean text through `JSON_SERIALIZE`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declared_super_is_serialized_and_undeclared_refused() {
+    let src = Source::pg16().await;
+    src.sql(
+        "DROP VIEW svv_columns;
+         CREATE VIEW svv_columns AS SELECT table_schema, table_name, column_name, ordinal_position,
+           CASE WHEN domain_name = 'super' THEN 'super' ELSE data_type END AS data_type,
+           character_maximum_length, numeric_precision, numeric_scale
+           FROM information_schema.columns;
+         CREATE DOMAIN super AS jsonb;
+         CREATE FUNCTION json_serialize(jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS 'SELECT $1::text';
+         CREATE SCHEMA src;
+         CREATE TABLE src.events (id int NOT NULL, payload super);
+         INSERT INTO src.events VALUES (1, '{\"a\": 1, \"tags\": [\"x\", \"it''s\"]}'), (2, NULL);
+         CREATE VIEW src.boom AS SELECT id, 1 / (id - id) AS n FROM src.events;",
+    )
+    .await;
+    let p = Project::new(
+        &src,
+        "replications:
+  declared:
+    source: warehouse
+    target: lake
+    streams:
+      - {id: ev/json, mode: full-refresh, from: {table: src.events}, object: br.ev_json, primary_key: [id], columns: {payload: {type: JSON}}}
+      - {id: ev/text, mode: full-refresh, from: {table: src.events}, object: br.ev_text, primary_key: [id], columns: {payload: {type: VARCHAR}}}
+  undeclared:
+    source: warehouse
+    target: lake
+    streams:
+      - {id: ev/boom, mode: full-refresh, from: {table: src.boom}, object: br.boom, primary_key: [id]}
+      - {id: ev/raw, mode: full-refresh, from: {table: src.events}, object: br.ev_raw, primary_key: [id]}
+",
+    );
+    let r = p.run(&["declared"]).await;
+    r.ok();
+    assert_eq!(r.stream_rows("ev/json", "inserted"), 2);
+    assert_eq!(r.stream_rows("ev/text", "inserted"), 2);
+    assert_eq!(p.type_of("ev_json", "payload"), "JSON");
+    assert_eq!(p.type_of("ev_text", "payload"), "VARCHAR");
+    assert_eq!(p.type_of("ev_text", "id"), "INTEGER");
+    for t in ["ev_json", "ev_text"] {
+        assert_eq!(
+            p.lake_q(&format!(
+                "SELECT coalesce(payload::VARCHAR, 'NULL') FROM lake.br.{t} ORDER BY id"
+            )),
+            [r#"{"a": 1, "tags": ["x", "it's"]}"#, "NULL"]
+        );
+    }
+    assert_eq!(
+        p.lake_one("SELECT payload->>'$.tags[1]' FROM lake.br.ev_json WHERE id = 1"),
+        "it's"
+    );
+
+    let r = p.run(&["undeclared"]).await;
+    assert_ne!(r.code, 0);
+    assert_eq!(r.status("undeclared"), "failed");
+    let err = r.report["replications"][0]["error"].clone();
+    assert_eq!(err["code"], "source_type", "{err:#}");
+    assert_eq!(
+        err["message"],
+        "`src.events`: column `payload` is super, which the target can't hold: there's no semi-structured type, and its text depends on the read path; declare `columns.payload.type` (JSON or VARCHAR) to read it as `JSON_SERIALIZE(\"payload\")`, or exclude it with `columns.exclude`"
+    );
+    assert!(
+        p.lake_q("SELECT table_name FROM duckdb_tables() WHERE database_name = 'lake' AND table_name IN ('boom', 'ev_raw')")
+            .is_empty(),
+        "refused before any member is read (reading `src.boom` fails)"
+    );
+}
+
 // ------------------------------------------------------------------------- live Redshift
 
 /// `REDSHIFT_*` from the environment, else from the workspace `.env`.

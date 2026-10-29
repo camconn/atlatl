@@ -433,6 +433,143 @@ fn decimal_values_compare_exactly() {
 }
 
 #[test]
+fn decimal_values_group_by_scale() {
+    let big = "12345678901234567890123456789012345678";
+    let v = domain_violations(
+        &format!(r#"{{type: decimal, values: ["0.1", "{big}"]}}"#),
+        &[
+            &format!(r#""{big}""#),
+            &format!(r#""{big}.0""#),
+            r#""0.1""#,
+            r#""0.10000000001""#,
+            r#""12345678901234567890123456789012345677""#,
+        ],
+    );
+    assert_eq!(v, [false, false, false, true, true]);
+
+    let v = domain_violations(
+        r#"{type: decimal, values: ["1e-38"]}"#,
+        &[
+            r#""0.00000000000000000000000000000000000001""#,
+            r#""0.1e-37""#,
+            r#""2e-38""#,
+            r#""0.00000000000000000000000000000000000002""#,
+            r#""0.0000000000000000000000000000000000001""#,
+            r#""0""#,
+        ],
+    );
+    assert_eq!(v, [false, false, true, true, true, true]);
+
+    let v = domain_violations(
+        r#"{type: decimal, values: ["1.5", "2.25", "100"]}"#,
+        &[
+            r#""1.5""#,
+            r#""2.25""#,
+            "100",
+            r#""100.00""#,
+            r#""1.55""#,
+            r#""2.2""#,
+            r#""100.5""#,
+            r#""2.250000001""#,
+        ],
+    );
+    assert_eq!(v, [false, false, false, false, true, true, true, true]);
+}
+
+#[test]
+fn decimal_values_reject_digits_past_cast_precision() {
+    let nines = "4".to_owned() + &"9".repeat(40);
+    let zeros = "0".repeat(45);
+    let v = domain_violations(
+        "{type: decimal, values: [\"1.5\", \"-1.5\"]}",
+        &[
+            &format!(r#""1.{nines}""#),
+            &format!(r#""-1.{nines}""#),
+            &format!(r#""0.1{nines}e1""#),
+            &format!(r#""1{nines}e-41""#),
+            &format!(r#""1.5{zeros}""#),
+            &format!(r#""{zeros}1.5""#),
+            &format!(r#""-1.5{zeros}""#),
+            &format!(r#""0.15{zeros}e1""#),
+        ],
+    );
+    assert_eq!(v, [true, true, true, true, false, false, false, false]);
+
+    let v = domain_violations(
+        "{type: decimal, values: [\"0\"]}",
+        &[
+            r#""0.00000000000000000000000000000000000000001""#,
+            r#""1e-50""#,
+            r#""0.000""#,
+            r#""-0e5""#,
+        ],
+    );
+    assert_eq!(v, [true, true, false, false]);
+
+    let v = domain_violations(
+        "{type: decimal, values: [\"1e-38\"]}",
+        &[
+            r#""0.000000000000000000000000000000000000010000""#,
+            r#""0.000000000000000000000000000000000000014""#,
+        ],
+    );
+    assert_eq!(v, [false, true]);
+}
+
+#[test]
+fn integer_values_reject_fractions_as_type_violations() {
+    let y = "schema:\n  fields:\n    a: {type: integer, values: [5]}\n";
+    for (i, bad) in [
+        ("5.4", true),
+        (r#""5.4""#, true),
+        ("5.0", true),
+        (r#""5.0""#, true),
+        (r#""5e0""#, true),
+        ("5", false),
+        (r#""+5""#, false),
+    ] {
+        let c = staged(&[&format!(r#"{{"a": {i}}}"#)]);
+        let r = eval(&c, y).report;
+        assert_eq!(
+            violation(&r, "a", ViolationKind::Domain),
+            None,
+            "{i}: {r:?}"
+        );
+        assert_eq!(
+            violation(&r, "a", ViolationKind::Type),
+            bad.then_some(1),
+            "{i}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn decimal_values_beyond_38_digits_are_config_errors() {
+    let c = staged(&[r#"{"a": 1}"#]);
+    for bad in [
+        "123456789012345678901234567890123456789",
+        "1.00000000000000000000000000000000000001",
+        "1e-39",
+        "1e38",
+    ] {
+        let s = schema(&format!(
+            "schema:\n  fields:\n    a: {{type: decimal, values: [\"0.1\", \"{bad}\"]}}\n"
+        ));
+        let e = evaluate(&c, &Staged::records("stg"), &s).expect_err(bad);
+        assert_eq!(e.class, ErrorClass::Config, "{bad}");
+        assert!(
+            e.to_string().contains("field `a`")
+                && e.to_string().contains(bad)
+                && e.to_string().contains("at most 38"),
+            "{e}"
+        );
+    }
+    let s = schema("schema:\n  fields:\n    a: {type: decimal, values: [\"NaN\"]}\n");
+    let e = evaluate(&c, &Staged::records("stg"), &s).expect_err("NaN");
+    assert_eq!(e.class, ErrorClass::Config);
+}
+
+#[test]
 fn float_values_keep_double_semantics() {
     let v = domain_violations(
         "{type: float, values: [9007199254740992, 1.5]}",
@@ -442,15 +579,129 @@ fn float_values_keep_double_semantics() {
 }
 
 #[test]
-fn decimal_text_parts() {
-    let p = |s: &str| decimal_parts(s).map(|(n, d, e)| decimal_text(n, &d, e));
-    assert_eq!(p("1.50").as_deref(), Some("1.5"));
-    assert_eq!(p("1e-3").as_deref(), Some("0.001"));
-    assert_eq!(p("-12.5E2").as_deref(), Some("-1250"));
-    assert_eq!(p(".05").as_deref(), Some("0.05"));
-    assert_eq!(p("-0.00").as_deref(), Some("0"));
-    assert_eq!(p("00120").as_deref(), Some("120"));
-    for bad in ["", ".", "1.2.3", "abc", "1e", "NaN", "inf", "1_0"] {
-        assert_eq!(decimal_parts(bad), None, "{bad}");
-    }
+fn decimal_values_see_exact_number_text() {
+    let v = domain_violations(
+        r#"{type: decimal, values: ["0.12345678901234567891"]}"#,
+        &[
+            "0.12345678901234567891",
+            "0.12345678901234567892",
+            r#""0.12345678901234567891""#,
+            "0.123456789012345678910",
+        ],
+    );
+    assert_eq!(v, [false, true, false, false]);
+}
+
+#[test]
+fn samples_keep_number_text() {
+    let samples = |r: &SchemaReport| -> Vec<Value> {
+        r.violations
+            .iter()
+            .find(|v| v.field == "a")
+            .expect("a")
+            .samples
+            .iter()
+            .map(|s| s["value"].clone())
+            .collect()
+    };
+    let c = staged(&[
+        r#"{"a": 12345678901234567.891}"#,
+        r#"{"a": { "x" : 0.12345678901234567891, "y": [1.10, "p q"] }}"#,
+        r#"{"a": "0.12345678901234567891"}"#,
+        r#"{"a": null}"#,
+    ]);
+    let y = "schema:\n  fields:\n    a: {type: integer}\n";
+    let want = vec![
+        json!("12345678901234567.891"),
+        json!(r#"{"x":0.12345678901234567891,"y":[1.10,"p q"]}"#),
+        json!("0.12345678901234567891"),
+    ];
+    assert_eq!(samples(&eval(&c, y).report), want);
+    assert_eq!(samples(&eval(&c, y).report), want, "registered once");
+
+    c.execute_batch(
+        r#"CREATE TABLE j AS SELECT * FROM (VALUES
+             ('12345678901234567.891'::JSON),
+             ('{ "x" : 0.12345678901234567891, "y": [1.10, "p q"] }'::JSON),
+             ('"0.12345678901234567891"'::JSON),
+             ('null'::JSON)) t(a)"#,
+    )
+    .expect("setup");
+    let st = Staged::Columns {
+        relation: "j",
+        exclude: &[],
+        ordinal: None,
+    };
+    let e = evaluate(&c, &st, &schema(y)).expect("eval");
+    assert_eq!(samples(&e.report), want);
+}
+
+#[test]
+fn decimal_values_ignore_spelling() {
+    let v = domain_violations(
+        r#"{type: decimal, values: ["1.5"]}"#,
+        &[
+            r#""15e-1""#,
+            r#""0.15E+1""#,
+            r#""1.5e0""#,
+            r#""150e-2""#,
+            r#""1.50""#,
+            r#""151e-2""#,
+            "15e-1",
+            "15E-1",
+            "0.15e+1",
+            "150e-2",
+            "151e-2",
+        ],
+    );
+    assert_eq!(
+        v,
+        [
+            false, false, false, false, false, true, false, false, false, false, true
+        ]
+    );
+
+    let tiny = format!("0.{}1", "0".repeat(37));
+    let v = domain_violations(
+        r#"{type: decimal, values: ["1e-38"]}"#,
+        &[
+            r#""1e-38""#,
+            r#""10e-39""#,
+            r#""0.1e-37""#,
+            &format!(r#""{tiny}""#),
+            r#""2e-38""#,
+            "1e-38",
+            "100E-40",
+            "2e-38",
+        ],
+    );
+    assert_eq!(v, [false, false, false, false, true, false, false, true]);
+
+    let v = domain_violations(
+        r#"{type: decimal, values: ["100"]}"#,
+        &[
+            r#""1e2""#,
+            r#""1E+2""#,
+            "1e2",
+            "1000e-1",
+            r#""1e3""#,
+            "101e0",
+        ],
+    );
+    assert_eq!(v, [false, false, false, false, true, true]);
+}
+
+#[test]
+fn decimal_values_reject_huge_exponents() {
+    let v = domain_violations(
+        r#"{type: decimal, values: ["1", "0"]}"#,
+        &[
+            r#""1e999999999""#,
+            "1e999999999",
+            r#""1e-999999999""#,
+            r#""1e99999999999999999999""#,
+            r#""0e999999999""#,
+        ],
+    );
+    assert_eq!(v, [true, true, true, true, false]);
 }

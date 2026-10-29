@@ -741,6 +741,33 @@ async fn json_canon_is_visible_on_every_connection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn json_exact_is_visible_on_every_connection() {
+    let e = engine();
+    let mut s = e.session().expect("session");
+    let v: (String, String, Option<String>, Option<String>) = s
+        .run(|c| {
+            c.query_row(
+                "SELECT atlatl_json_exact('{\"a\": [0.12345678901234567891]}', 'a'), \
+                 atlatl_json_exact(' 1.10 '), atlatl_json_exact('{}', 'a'), atlatl_json_exact(NULL)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .map_err(|e| atlatl_core::AtlatlError::internal(e.to_string()))
+        })
+        .await
+        .expect("query");
+    assert_eq!(
+        v,
+        (
+            "[0.12345678901234567891]".to_owned(),
+            "1.10".to_owned(),
+            None,
+            None
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn json_canon_survives_deep_nesting_in_sql() {
     let e = engine();
     let v: (bool, bool, bool) = e

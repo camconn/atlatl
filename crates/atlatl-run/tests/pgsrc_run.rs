@@ -35,6 +35,9 @@ on_both!(
     errors_are_classified,
     wildcard_members_resolve_their_own_keys,
     shared_snapshot_reads_members_consistently,
+    refused_types_are_reported_before_reading,
+    query_columns_narrow_before_admission,
+    declared_types_follow_on_cast_error,
 );
 
 /// A server per version with `pg_stat_statements`, to see the statements the scanner sends.
@@ -48,6 +51,20 @@ fn stats_pg(v: u32) -> &'static Postgres {
             .start()
             .expect("postgres with pg_stat_statements")
     })
+}
+
+/// Held by tests reading `pg_stat_statements`, which one of them resets.
+static STATS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+mod guard_follows_the_read {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg12() {
+        super::guard_follows_the_read(super::stats_pg(12)).await
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg16() {
+        super::guard_follows_the_read(super::stats_pg(16)).await
+    }
 }
 
 mod cursor_pushdown {
@@ -221,6 +238,7 @@ const WILDCARD: &str = r#"replications:
         mode: full-refresh
         primary_key: [id]
         on_empty: mirror
+        columns: {m: {type: VARCHAR}, tags: {type: VARCHAR}, big: {type: VARCHAR}}
 "#;
 
 async fn wildcard_full_refresh_is_one_commit(pg: &'static Postgres) {
@@ -424,7 +442,7 @@ const INC_REPS: &str = r#"replications:
         mode: incremental
         primary_key: [id]
         update_key: at
-        columns: {exclude: [junk]}
+        columns: {exclude: [junk], tags: {type: VARCHAR}}
 "#;
 
 async fn incremental_update_key(pg: &'static Postgres) {
@@ -688,6 +706,7 @@ async fn wildcard_members_resolve_their_own_keys(pg: &'static Postgres) {
 }
 
 async fn cursor_pushdown(pg: &'static Postgres) {
+    let _stats = STATS.lock().await;
     let seed = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
         CREATE SCHEMA appdb;
         CREATE TABLE appdb.native_t (id int PRIMARY KEY, at timestamptz);
@@ -703,8 +722,8 @@ async fn cursor_pushdown(pg: &'static Postgres) {
     defaults: {mode: incremental, primary_key: [id]}
     streams:
       - {id: push/native, from: {table: appdb.native_t}, object: br.native_t, update_key: at}
-      - {id: push/cast, from: {table: appdb.cast_t}, object: br.cast_t, update_key: at}
-      - {id: push/cast_uk, from: {table: appdb.cast_uk}, object: br.cast_uk, update_key: n}
+      - {id: push/cast, from: {table: appdb.cast_t}, object: br.cast_t, update_key: at, columns: {tags: {type: VARCHAR}}}
+      - {id: push/cast_uk, from: {table: appdb.cast_uk}, object: br.cast_uk, update_key: n, columns: {n: {type: "DECIMAL(10,1)"}, tags: {type: VARCHAR}}}
 "#;
     let e = setup(pg, seed, reps).await;
     ok(&go(&e, &["push"]).await, "push");
@@ -768,6 +787,129 @@ async fn cursor_pushdown(pg: &'static Postgres) {
     assert!(
         !uk.is_empty() && !has_cursor(&uk, "n"),
         "a converted cursor column stays engine-side: {copies:?}"
+    );
+    let lookups: i64 = e
+        .sql
+        .client()
+        .query_one(
+            "SELECT coalesce(sum(calls), 0)::int8 FROM pg_stat_statements
+             WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+               AND query LIKE 'WITH RECURSIVE b(attnum, oid, typmod)%'",
+            &[],
+        )
+        .await
+        .expect("lookups")
+        .get(0);
+    assert_eq!(
+        lookups, 3,
+        "the type check's column lookup is reused when staging"
+    );
+}
+
+const GUARD_REPS: &str = r#"replications:
+  win:
+    source: appdb_pg
+    target: lake
+    defaults: {mode: incremental, primary_key: [id]}
+    streams:
+      - {id: win/pushed, from: {table: appdb.g}, object: br.g_pushed, window: "id <= 2 AND ts >= now() - INTERVAL 30 DAY"}
+      - {id: win/opaque, from: {table: appdb.g}, object: br.g_opaque, window: "id IN (1, 2)"}
+  win_nan:
+    source: appdb_pg
+    target: lake
+    streams: [{id: win/nan, from: {table: appdb.g}, object: br.g_nan, mode: incremental, primary_key: [id], window: "id IN (1, 2, 3)"}]
+  win_past:
+    source: appdb_pg
+    target: lake
+    streams: [{id: win/past, from: {table: appdb.g}, object: br.g_past, mode: incremental, primary_key: [id], window: "id >= 4"}]
+  cur:
+    source: appdb_pg
+    target: lake
+    streams: [{id: cur/u, from: {table: appdb.c}, object: br.c, mode: incremental, primary_key: [id], update_key: u}]
+"#;
+
+/// The guard looks at exactly the rows the read keeps, narrowed in Postgres where the `window`
+/// translates; an engine-only cursor (a uuid) narrows it engine-side.
+async fn guard_follows_the_read(pg: &'static Postgres) {
+    let _stats = STATS.lock().await;
+    let seed = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+        CREATE SCHEMA appdb;
+        CREATE TABLE appdb.g (id int PRIMARY KEY, n numeric(12,2), ts timestamptz);
+        INSERT INTO appdb.g VALUES (1, 1.5, now()), (2, NULL, now()), (3, 'NaN', now()),
+          (4, 2, '294250-01-01 00:00:00+00');
+        CREATE TABLE appdb.c (id int PRIMARY KEY, u uuid, n numeric(12,2));
+        INSERT INTO appdb.c VALUES (1, '00000000-0000-0000-0000-000000000001', 1),
+          (2, '00000000-0000-0000-0000-000000000002', 2);";
+    let e = setup(pg, seed, GUARD_REPS).await;
+    e.sql
+        .client()
+        .batch_execute("SELECT pg_stat_statements_reset()")
+        .await
+        .expect("reset");
+    let r = go(&e, &["win", "win_nan", "win_past", "cur"]).await;
+    assert_eq!(
+        ok(&r, "win")
+            .iter()
+            .map(|m| m.rows.inserted)
+            .collect::<Vec<_>>(),
+        [2, 2],
+        "a NaN and a timestamp past the engine's range outside the window aren't looked at"
+    );
+    let (class, _, msg) = failed(&r, "win_nan");
+    assert!(
+        class == "data" && msg.contains("column `n` of `appdb.g` holds NaN"),
+        "{msg}"
+    );
+    let (class, _, msg) = failed(&r, "win_past");
+    assert!(
+        class == "data" && msg.contains("column `ts` of `appdb.g` holds 294250-01-01"),
+        "{msg}"
+    );
+    let guards: Vec<String> = e
+        .sql
+        .client()
+        .query(
+            "SELECT query FROM pg_stat_statements WHERE query LIKE 'COPY%atlatl_bad_%'",
+            &[],
+        )
+        .await
+        .expect("statements")
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert!(
+        guards
+            .iter()
+            .any(|q| q.contains(r#"("id" <= "#) && q.contains(r#"("ts" >= "#)),
+        "a translatable window narrows the guard in Postgres: {guards:?}"
+    );
+
+    assert_eq!(ok(&go(&e, &["cur"]).await, "cur")[0].rows.inserted, 0);
+    e.sql
+        .client()
+        .batch_execute(
+            "UPDATE appdb.c SET n = 'NaN' WHERE id = 1;
+             INSERT INTO appdb.c VALUES (3, '00000000-0000-0000-0000-000000000003', 3);",
+        )
+        .await
+        .expect("more");
+    let m = ok(&go(&e, &["cur"]).await, "cur")[0].clone();
+    assert_eq!(
+        (m.rows.staged, m.rows.inserted),
+        (2, 1),
+        "a NaN below the watermark isn't looked at"
+    );
+    e.sql
+        .client()
+        .batch_execute(
+            "INSERT INTO appdb.c VALUES (4, '00000000-0000-0000-0000-000000000004', 'NaN');",
+        )
+        .await
+        .expect("bad");
+    let (class, _, msg) = failed(&go(&e, &["cur"]).await, "cur");
+    assert!(
+        class == "data" && msg.contains("column `n` of `appdb.c` holds NaN"),
+        "{msg}"
     );
 }
 
@@ -851,4 +993,202 @@ async fn shared_snapshot_reads_members_consistently(pg: &'static Postgres) {
         .expect("activity")
         .get(0);
     assert_eq!(holders, 0, "the exported snapshot is released");
+}
+
+async fn refused_types_are_reported_before_reading(pg: &'static Postgres) {
+    let seed = "CREATE SCHEMA appdb;
+        CREATE TYPE appdb.mood AS ENUM ('happy', 'sad');
+        CREATE VIEW appdb.aa_boom AS SELECT 1 / (random() * 0)::int AS id;
+        CREATE TABLE appdb.a (id int PRIMARY KEY, cash money);
+        CREATE TABLE appdb.b (id int PRIMARY KEY, m appdb.mood, xs int[], ok text);
+        CREATE TABLE appdb.c (id int PRIMARY KEY, n numeric);
+        INSERT INTO appdb.a VALUES (1, 1); INSERT INTO appdb.b VALUES (1, 'sad', '{1}', 'x');
+        INSERT INTO appdb.c VALUES (1, 1.5);";
+    let reps = r#"replications:
+  appdb:
+    source: appdb_pg
+    target: lake
+    defaults: {mode: full-refresh}
+    streams:
+      - {id: appdb/all, from: {tables: "appdb.*", include_views: true, exclude: [appdb.c]}, object: "br.{{ member.table }}"}
+      - {id: appdb/q, from: {query: "SELECT id, n FROM appdb.c"}, object: br.q, primary_key: [id]}
+"#;
+    let e = setup(pg, seed, reps).await;
+    let s0 = snapshots(&e);
+    let r = go(&e, &["appdb"]).await;
+    let (class, code, msg) = failed(&r, "appdb");
+    assert_eq!(
+        (class.as_str(), code.as_deref()),
+        ("config", Some("source_type")),
+        "{msg}"
+    );
+    let lines: Vec<&str> = msg.lines().collect();
+    assert_eq!(
+        lines[0], "4 source columns can't be landed as they are:",
+        "every member's columns at once, before the view is read: {msg}"
+    );
+    for (i, want) in [
+        "  `appdb.a`: column `cash` is money, ",
+        "  `appdb.b`: column `m` is appdb.mood, ",
+        "  `appdb.b`: column `xs` is integer[], ",
+        "  `from.query of appdb/q`: column `n` is numeric, ",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert!(lines[i + 1].starts_with(want), "{}", lines[i + 1]);
+    }
+    assert_eq!(snapshots(&e), s0);
+    assert!(!exists(&e, "aa_boom") && !exists(&e, "a") && !exists(&e, "q"));
+
+    let (p, d) = atlatl_core::config::load(e.project.path());
+    assert!(!d.has_errors(), "{d:?}");
+    let vars: Arc<dyn EnvSource> = Arc::new(MapEnv::default());
+    let req = PlanRequest {
+        discover: true,
+        ..PlanRequest::all()
+    };
+    let (mut plan, _) = atlatl_core::plan::build(
+        &p,
+        &req,
+        vars.clone(),
+        atlatl_core::redact::Redactor::global(),
+    )
+    .expect("plan");
+    let err = atlatl_run::pgsrc::discover_plan(&p, &mut plan, vars.clone())
+        .await
+        .expect_err("plan --discover checks types");
+    assert_eq!(err.message, msg, "the plan reports what the run would");
+
+    let fixed = reps.replace(
+        "object: \"br.{{ member.table }}\"}",
+        "object: \"br.{{ member.table }}\", columns: {cash: {type: \"DECIMAL(19,2)\"}, \"*\": {type: VARCHAR}}}",
+    )
+    .replace("primary_key: [id]}", "primary_key: [id], columns: {n: {type: \"DECIMAL(10,1)\"}}}")
+    .replace("include_views: true, ", "");
+    std::fs::write(e.project.path().join("replications/appdb.yaml"), fixed).expect("fixed");
+    let r = go(&e, &["appdb"]).await;
+    ok(&r, "appdb");
+    assert_eq!(
+        one::<String>(
+            &e,
+            "SELECT concat_ws('|', cash, typeof(cash)) FROM lake.br.a"
+        ),
+        "1.00|DECIMAL(19,2)"
+    );
+    assert_eq!(
+        one::<String>(&e, "SELECT concat_ws('|', id, m, xs, ok) FROM lake.br.b"),
+        "1|sad|[1]|x"
+    );
+    assert_eq!(
+        one::<String>(&e, "SELECT concat_ws('|', n, typeof(n)) FROM lake.br.q"),
+        "1.5|DECIMAL(10,1)"
+    );
+}
+
+const NARROW_SEED: &str = "CREATE SCHEMA appdb;
+    CREATE TYPE appdb.mood AS ENUM ('happy', 'sad');
+    CREATE TABLE appdb.t (id int PRIMARY KEY, m appdb.mood, d numeric(10,2), amt numeric);
+    INSERT INTO appdb.t VALUES (1, 'sad', 'NaN', 12.5), (2, 'happy', 1, 12345.6789), (3, NULL, 2, NULL);";
+
+async fn query_columns_narrow_before_admission(pg: &'static Postgres) {
+    let reps = r#"replications:
+  appdb:
+    source: appdb_pg
+    target: lake
+    defaults: {mode: full-refresh, primary_key: [id]}
+    streams:
+      - {id: appdb/ex, from: {query: "SELECT id, m, d FROM appdb.t"}, object: br.ex, columns: {exclude: [M, d]}}
+      - {id: appdb/in, from: {query: "SELECT id, m, d FROM appdb.t;"}, object: br.inc, columns: {include: [id]}}
+  none:
+    source: appdb_pg
+    target: lake
+    streams:
+      - {id: appdb/none, mode: full-refresh, from: {query: "SELECT id FROM appdb.t"}, object: br.none, columns: {exclude: [id]}}
+"#;
+    let e = setup(pg, NARROW_SEED, reps).await;
+    let r = go(&e, &["appdb", "none"]).await;
+    ok(&r, "appdb");
+    for t in ["ex", "inc"] {
+        assert_eq!(
+            one::<String>(
+                &e,
+                &format!(
+                    "SELECT string_agg(column_name, ',') FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = '{t}' AND NOT starts_with(column_name, '_atlatl')"
+                )
+            ),
+            "id",
+            "{t}"
+        );
+        assert_eq!(
+            one::<i64>(&e, &format!("SELECT count(*) FROM lake.br.{t}")),
+            3,
+            "{t}"
+        );
+    }
+    let (class, _, msg) = failed(&r, "none");
+    assert_eq!(class, "config", "{msg}");
+    assert!(msg.contains("leaves no column of `from.query`"), "{msg}");
+}
+
+async fn declared_types_follow_on_cast_error(pg: &'static Postgres) {
+    let reps = r#"replications:
+  strict:
+    source: appdb_pg
+    target: lake
+    defaults: {mode: full-refresh, primary_key: [id]}
+    streams:
+      - {id: appdb/strict, from: {table: appdb.t}, object: br.strict, columns: {exclude: [m, d], amt: {type: "DECIMAL(10,2)"}}}
+  nulled:
+    source: appdb_pg
+    target: lake
+    defaults: {mode: full-refresh, primary_key: [id], on_cast_error: {set_null: true}}
+    streams:
+      - {id: appdb/tbl, from: {table: appdb.t}, object: br.tbl, columns: {exclude: [m, d], amt: {type: "DECIMAL(10,2)"}}}
+      - {id: appdb/q, from: {query: "SELECT id, m, amt FROM appdb.t"}, object: br.q, columns: {include: [id, amt], amt: {type: "DECIMAL(10,2)"}}}
+"#;
+    let e = setup(pg, NARROW_SEED, reps).await;
+    let r = go(&e, &["strict"]).await;
+    let (_, _, msg) = failed(&r, "strict");
+    assert!(
+        msg.contains(
+            "column `amt` of `appdb.t` holds 12345.6789, which DECIMAL(10,2) can't hold exactly"
+        ),
+        "{msg}"
+    );
+    assert!(!exists(&e, "strict"));
+
+    let r = go(&e, &["nulled"]).await;
+    let members = ok(&r, "nulled");
+    assert_eq!(members.len(), 2);
+    for m in members {
+        let w = m
+            .warnings
+            .iter()
+            .find(|w| w.code == "cast_set_null")
+            .unwrap_or_else(|| panic!("{}: {:?}", m.member, m.warnings));
+        assert!(w.message.starts_with("1 values "), "{}", w.message);
+    }
+    for t in ["tbl", "q"] {
+        assert_eq!(
+            one::<String>(
+                &e,
+                &format!(
+                    "SELECT string_agg(concat_ws('|', id, coalesce(amt::VARCHAR, '-'), typeof(amt)), ',' ORDER BY id) FROM lake.br.{t}"
+                )
+            ),
+            "1|12.50|DECIMAL(10,2),2|-|DECIMAL(10,2),3|-|DECIMAL(10,2)",
+            "{t}"
+        );
+        assert_eq!(
+            one::<i64>(
+                &e,
+                &format!(
+                    "SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = '{t}' AND starts_with(column_name, '_atlatl_nulled')"
+                )
+            ),
+            0,
+            "{t}"
+        );
+    }
 }

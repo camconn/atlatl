@@ -85,6 +85,7 @@ pub fn resolve(
                 .and_then(|d| d.value.mode)
                 .unwrap_or(DeleteMode::Hard),
             history: c.history.unwrap_or(false),
+            columns: c.columns.clone(),
             config_hash: state_config_hash(s),
         });
     }

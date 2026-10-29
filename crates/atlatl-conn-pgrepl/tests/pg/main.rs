@@ -6,6 +6,7 @@ mod lifecycle;
 mod protocol;
 mod resume;
 mod tls;
+mod types;
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -14,7 +15,7 @@ use atlatl_conn_pgrepl::{
     Limits, PgChangeSource, ReplicationSpec, RunReport, SlotPolicy, StreamSpec, run_once,
 };
 use atlatl_conn_postgres::{ConnectOptions, Session, connect};
-use atlatl_core::config::model::{DeleteMode, PgChanges, PgProtocol, SlotsConfig};
+use atlatl_core::config::model::{ColumnsConfig, DeleteMode, PgChanges, PgProtocol, SlotsConfig};
 use atlatl_testkit::{LocalLake, Postgres, unique};
 
 static PG12: OnceLock<Result<Postgres, String>> = OnceLock::new();
@@ -109,8 +110,14 @@ pub fn stream(table: &str) -> StreamSpec {
         primary_key: None,
         deletes: DeleteMode::Hard,
         history: false,
+        columns: None,
         config_hash: "h1".into(),
     }
+}
+
+/// `columns:` from its YAML shape as JSON.
+pub fn columns(v: serde_json::Value) -> Option<ColumnsConfig> {
+    Some(serde_json::from_value(v).expect("columns"))
 }
 
 impl Env {

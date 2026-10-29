@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atlatl_conn_postgres::{ConnectOptions, Session, wrap};
-use atlatl_core::config::model::{DeleteMode, PgProtocol};
+use atlatl_core::config::model::{ColumnsConfig, DeleteMode, PgProtocol};
 use atlatl_core::error::Result;
 use atlatl_core::{AtlatlError, ErrorClass};
 use atlatl_state::{LakeState, StateKind};
@@ -20,6 +20,7 @@ use crate::lsn::Lsn;
 use crate::pgoutput::{Col, Column, Msg, Relation, decode};
 use crate::slot::{self, SlotPolicy, SlotStats, quote_ident};
 use crate::stage::{KeyChange, Op, Row, Stage, StageCol, copy_fields};
+use crate::types::Catalog;
 use crate::wire::{Repl, ReplConn};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,7 +36,46 @@ pub struct StreamSpec {
     pub deletes: DeleteMode,
     /// Append every netted change instead of upserting.
     pub history: bool,
+    /// `include`/`exclude` narrow the columns landed; `columns.<c>.type` sets a column's lake
+    /// type, or opts a refused one in ([`crate::types`]).
+    pub columns: Option<ColumnsConfig>,
     pub config_hash: String,
+}
+
+impl StreamSpec {
+    fn declared(&self, column: &str) -> Option<&str> {
+        self.columns.as_ref().and_then(|c| c.declared(column))
+    }
+
+    fn label(&self) -> String {
+        format!("{}.{}", self.source_schema, self.source_table)
+    }
+
+    fn keeps(&self, column: &str) -> bool {
+        self.columns.as_ref().is_none_or(|c| c.keeps(column))
+    }
+
+    /// Column settings a changes stream has no place for.
+    fn check_columns(&self) -> Result<()> {
+        let Some(c) = &self.columns else {
+            return Ok(());
+        };
+        for (name, cc) in &c.columns {
+            for (k, set) in [
+                ("transform", cc.transform.is_some()),
+                ("target_type", cc.target_type.is_some()),
+                ("source_name", cc.source_name.is_some()),
+            ] {
+                if set {
+                    return Err(AtlatlError::config(format!(
+                        "`columns.{name}.{k}` does not apply to postgres `changes` streams (stream `{}`)",
+                        self.id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -123,6 +163,7 @@ pub struct PgChangeSource {
     protocol: u32,
     binary: bool,
     plans: Plans,
+    catalog: Catalog,
 }
 
 fn is_busy(e: &AtlatlError) -> bool {
@@ -143,9 +184,9 @@ fn text(plans: &Plans, rel: &Relation, col: &Column, c: &Col) -> Result<Option<S
     match c {
         Col::Null => Ok(None),
         Col::Unchanged => Ok(None),
-        Col::Text(b) => String::from_utf8(b.to_vec())
+        Col::Text(b) => crate::stage::utf8(b.to_vec())
             .map(Some)
-            .map_err(|_| AtlatlError::internal("pgoutput value is not UTF-8")),
+            .ok_or_else(|| AtlatlError::internal("pgoutput value is not UTF-8")),
         Col::Binary(b) => match plans.get(col.type_oid) {
             Some(p) => render(p, b).map(Some),
             None => Err(AtlatlError::transient(format!(
@@ -182,6 +223,7 @@ impl PgChangeSource {
             )));
         }
         for (i, a) in rep.streams.iter().enumerate() {
+            a.check_columns()?;
             if rep.streams[..i]
                 .iter()
                 .any(|b| (&b.source_schema, &b.source_table) == (&a.source_schema, &a.source_table))
@@ -208,6 +250,7 @@ impl PgChangeSource {
             protocol: 1,
             binary: false,
             plans: Plans::default(),
+            catalog: Catalog::default(),
         })
     }
 
@@ -271,7 +314,7 @@ impl PgChangeSource {
             )));
         }
         let mut pk: Vec<(i32, String)> = Vec::new();
-        let cols = rows
+        let mut cols = rows
             .iter()
             .map(|r| {
                 let name: String = r.get(0);
@@ -282,6 +325,7 @@ impl PgChangeSource {
                     name,
                     oid: r.get::<_, i64>(1) as u32,
                     typmod: r.get(2),
+                    land: Default::default(),
                 }
             })
             .collect::<Vec<_>>();
@@ -303,7 +347,14 @@ impl PgChangeSource {
                     s.id, s.source_schema, s.source_table
                 )));
             }
+            if !s.keeps(k) {
+                return Err(AtlatlError::config(format!(
+                    "stream `{}`: primary key column `{k}` is left out by `columns.include`/`exclude`; a changes stream lands its key",
+                    s.id
+                )));
+            }
         }
+        cols.retain(|c| s.keeps(&c.name));
         Ok(TableMeta { cols, pk })
     }
 
@@ -462,6 +513,50 @@ impl PgChangeSource {
         Ok((create, from))
     }
 
+    /// Every stream's refused columns, judged as [`Self::changes`] judges them: `(table, line)`
+    /// pairs. Reads only the catalog; no slot or publication is touched.
+    pub async fn refused(&mut self) -> Result<Vec<(String, String)>> {
+        let mut metas = Vec::with_capacity(self.rep.streams.len());
+        for s in &self.rep.streams {
+            metas.push(self.table_meta(s).await?);
+        }
+        self.judge(&mut metas).await
+    }
+
+    /// Decides how every column lands, failing with one `config` error naming each column
+    /// refused, before a slot or publication is touched.
+    async fn admit(&mut self, metas: &mut [TableMeta]) -> Result<()> {
+        let bad = self.judge(metas).await?;
+        if bad.is_empty() {
+            Ok(())
+        } else {
+            Err(atlatl_conn_postgres::types::refused(&bad))
+        }
+    }
+
+    async fn judge(&mut self, metas: &mut [TableMeta]) -> Result<Vec<(String, String)>> {
+        let types: Vec<(u32, i32)> = metas
+            .iter()
+            .flat_map(|m| m.cols.iter().map(|c| (c.oid, c.typmod)))
+            .collect();
+        self.catalog.resolve(&self.sql, &types).await?;
+        let mut bad = Vec::new();
+        for (s, m) in self.rep.streams.iter().zip(metas.iter_mut()) {
+            for c in &mut m.cols {
+                match self
+                    .catalog
+                    .land(&c.name, c.oid, c.typmod, s.declared(&c.name))
+                {
+                    Ok((oid, typmod, land)) => {
+                        (c.oid, c.typmod, c.land) = (oid, typmod, land);
+                    }
+                    Err(line) => bad.push((s.label(), line)),
+                }
+            }
+        }
+        Ok(bad)
+    }
+
     async fn drop_slot(&self) -> Result<()> {
         self.sql
             .client()
@@ -495,7 +590,7 @@ impl PgChangeSource {
         copy.client()
             .batch_execute(
                 "SET TimeZone = 'UTC'; SET DateStyle = 'ISO, MDY'; SET IntervalStyle = 'postgres';
-                 SET extra_float_digits = 3; SET bytea_output = 'hex';
+                 SET extra_float_digits = 3; SET bytea_output = 'hex'; SET lc_monetary = 'C';
                  BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
             )
             .await
@@ -647,6 +742,7 @@ impl PgChangeSource {
         for s in &self.rep.streams {
             metas.push(self.table_meta(s).await?);
         }
+        self.admit(&mut metas).await?;
         let oids: Vec<u32> = metas
             .iter()
             .flat_map(|m| m.cols.iter().map(|c| c.oid))
@@ -670,7 +766,8 @@ impl PgChangeSource {
         let mut duck = duck;
         for (i, m) in metas.into_iter().enumerate() {
             let table = format!("pgrepl_{tag}_{i}");
-            let mut st = Stage::create(&duck, &table, m.cols, m.pk)?;
+            let label = self.rep.streams[i].label();
+            let mut st = Stage::create(&duck, &table, &label, m.cols, m.pk)?;
             if cursors[i].is_none() {
                 let s = self.rep.streams[i].clone();
                 duck = self.backfill(duck, &mut st, &s, &mut seq).await?;
@@ -925,17 +1022,28 @@ impl Streamer<'_> {
                 }
                 Repl::XLogData { data } => {
                     let (xid, m) = decode(data, self.in_stream.is_some())?;
+                    if let Msg::Relation(r) = &m {
+                        let types: Vec<(u32, i32)> =
+                            r.columns.iter().map(|c| (c.type_oid, c.typmod)).collect();
+                        let src = &mut *self.src;
+                        src.catalog.resolve(&src.sql, &types).await?;
+                    }
                     if let Msg::Relation(r) = &m
                         && self.src.binary
                     {
-                        let oids: Vec<u32> = r.columns.iter().map(|c| c.type_oid).collect();
-                        let src = &mut *self.src;
-                        src.plans.resolve(&src.sql, &oids).await?;
-                        if let Some(c) = r
+                        let spec =
+                            self.src.rep.streams.iter().find(|s| {
+                                s.source_schema == r.namespace && s.source_table == r.name
+                            });
+                        let kept: Vec<&Column> = r
                             .columns
                             .iter()
-                            .find(|c| src.plans.get(c.type_oid).is_none())
-                        {
+                            .filter(|c| spec.is_some_and(|s| s.keeps(&c.name)))
+                            .collect();
+                        let oids: Vec<u32> = kept.iter().map(|c| c.type_oid).collect();
+                        let src = &mut *self.src;
+                        src.plans.resolve(&src.sql, &oids).await?;
+                        if let Some(c) = kept.iter().find(|c| src.plans.get(c.type_oid).is_none()) {
                             tracing::info!(slot = %src.slot, table = %r.name, column = %c.name, type_oid = c.type_oid, "no binary decoder for a column type that appeared mid-window; restarting it with text values");
                             return Ok(None);
                         }
@@ -1085,7 +1193,8 @@ impl Streamer<'_> {
                 if let Some((i, info)) = self.target(rel)? {
                     let key = self.key(&info, &new)?;
                     let fb = key_json(&key.iter().map(|k| k.as_deref()).collect::<Vec<_>>());
-                    let (values, toast) = row_values(&self.src.plans, &info.rel, &new)?;
+                    let (values, toast) =
+                        row_values(&self.src.plans, &self.stages[i], &info.rel, &new)?;
                     self.push(i, Op::Insert, None, Some(fb), toast, values)?;
                     self.rels.insert(rel, info);
                 }
@@ -1097,7 +1206,8 @@ impl Streamer<'_> {
                         Some((_, o)) => Some(self.key(&info, o)?),
                         None => None,
                     };
-                    let (values, toast) = row_values(&self.src.plans, &info.rel, &new)?;
+                    let (values, toast) =
+                        row_values(&self.src.plans, &self.stages[i], &info.rel, &new)?;
                     let new_json = key_json(&key.iter().map(|k| k.as_deref()).collect::<Vec<_>>());
                     match old_key.filter(|o| *o != key) {
                         Some(o) => {
@@ -1190,15 +1300,26 @@ impl Streamer<'_> {
                 }
                 pk_idx.push(p);
             }
-            let cols: Vec<StageCol> = r
-                .columns
-                .iter()
-                .map(|c| StageCol {
-                    name: c.name.clone(),
-                    oid: c.type_oid,
-                    typmod: c.typmod,
-                })
-                .collect();
+            let mut cols = Vec::with_capacity(r.columns.len());
+            let mut bad = Vec::new();
+            for c in r.columns.iter().filter(|c| s.keeps(&c.name)) {
+                match self
+                    .src
+                    .catalog
+                    .land(&c.name, c.type_oid, c.typmod, s.declared(&c.name))
+                {
+                    Ok((oid, typmod, land)) => cols.push(StageCol {
+                        name: c.name.clone(),
+                        oid,
+                        typmod,
+                        land,
+                    }),
+                    Err(line) => bad.push((s.label(), line)),
+                }
+            }
+            if !bad.is_empty() {
+                return Err(atlatl_conn_postgres::types::refused(&bad));
+            }
             st.ensure_cols(&self.duck, &cols)?;
         }
         self.rels.insert(
@@ -1357,10 +1478,14 @@ impl Streamer<'_> {
 
 type Values = (Vec<(String, Option<String>)>, Vec<String>);
 
-fn row_values(plans: &Plans, rel: &Relation, cols: &[Col]) -> Result<Values> {
+/// The values of the columns `st` stages; the others are never rendered.
+fn row_values(plans: &Plans, st: &Stage, rel: &Relation, cols: &[Col]) -> Result<Values> {
     let mut values = Vec::with_capacity(cols.len());
     let mut toast = Vec::new();
     for (c, v) in rel.columns.iter().zip(cols) {
+        if st.col(&c.name).is_none() {
+            continue;
+        }
         if *v == Col::Unchanged {
             toast.push(c.name.clone());
         }
@@ -1485,6 +1610,7 @@ mod tests {
                 primary_key: None,
                 deletes: DeleteMode::Hard,
                 history: false,
+                columns: None,
                 config_hash: "h".into(),
             }],
             limits: Limits::default(),
@@ -1496,14 +1622,17 @@ mod tests {
                 name: "id".into(),
                 oid: 23,
                 typmod: -1,
+                land: Default::default(),
             },
             StageCol {
                 name: "v".into(),
                 oid: 25,
                 typmod: -1,
+                land: Default::default(),
             },
         ];
-        let mut stages = vec![Stage::create(&duck, "stg", cols, vec!["id".into()]).expect("stage")];
+        let mut stages =
+            vec![Stage::create(&duck, "stg", "public.t", cols, vec!["id".into()]).expect("stage")];
         let cursors = [None];
         let mut w = Streamer {
             src: &mut src,

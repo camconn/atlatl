@@ -39,6 +39,25 @@ const REPS: &str = r#"replications:
         mode: full-refresh
         from: {files: {url: "in", glob: "nope_*.csv"}, on_no_match: warn}
         object: br.missing
+  nulled:
+    source: files
+    target: lake
+    streams:
+      - id: f/nulled
+        mode: full-refresh
+        from: {files: {url: "in/amt", glob: "*.csv"}}
+        object: br.nulled
+        columns: {include: [id, amt], amt: {type: "DECIMAL(10,2)"}}
+        on_cast_error: {set_null: true}
+  strict:
+    source: files
+    target: lake
+    streams:
+      - id: f/strict
+        mode: full-refresh
+        from: {files: {url: "in/amt", glob: "*.csv"}}
+        object: br.strict
+        columns: {amt: {type: "DECIMAL(10,2)"}}
 "#;
 
 struct Env {
@@ -58,11 +77,25 @@ fn setup() -> Env {
         .and_then(|p| p.file("in/d1/prices_a.csv", "ticker,px\nAAPL,1.5\nMSFT,2\n"))
         .and_then(|p| p.file("in/d1/prices_b.csv", "ticker,px\nNVDA,3.25\n"))
         .and_then(|p| p.file("in/d1/other.csv", "ticker,px\nIGNORED,0\n"))
+        .and_then(|p| {
+            p.file(
+                "in/amt/a.csv",
+                "id,amt,note\n1,12.50,a\n2,12345.6789,b\n3,x,c\n",
+            )
+        })
         .expect("project");
     Env { lake, project }
 }
 
 async fn go(e: &Env, names: &[&str]) -> RunReport {
+    let r = attempt(e, names).await;
+    for x in &r.replications {
+        assert!(x.status.is_success(), "{}: {:?}", x.replication, x.error);
+    }
+    r
+}
+
+async fn attempt(e: &Env, names: &[&str]) -> RunReport {
     let (p, d) = atlatl_core::config::load(e.project.path());
     assert!(!d.has_errors(), "{d:?}");
     let vars: Arc<dyn EnvSource> = Arc::new(MapEnv::default());
@@ -74,7 +107,7 @@ async fn go(e: &Env, names: &[&str]) -> RunReport {
         extension_dir: Some(atlatl_testkit::extension_dir()),
         ..Default::default()
     };
-    let r = run(
+    run(
         Arc::new(p),
         args,
         vars,
@@ -83,11 +116,7 @@ async fn go(e: &Env, names: &[&str]) -> RunReport {
         |_, _| {},
     )
     .await
-    .expect("run");
-    for x in &r.replications {
-        assert!(x.status.is_success(), "{}: {:?}", x.replication, x.error);
-    }
-    r
+    .expect("run")
 }
 
 fn rows(r: &RunReport, rep: &str) -> RowCounts {
@@ -226,5 +255,42 @@ async fn concurrent_units_get_their_own_workdir() {
     assert_eq!(
         q::<String>(&e, "SELECT string_agg(v) FROM lake.br.tar_b"),
         "b"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declared_types_follow_on_cast_error() {
+    let e = setup();
+    let r = attempt(&e, &["strict"]).await;
+    let err = r.replications[0].error.as_ref().expect("error");
+    assert_eq!(err.code.as_deref(), Some("cast_failed"), "{err:?}");
+    assert!(
+        err.message
+            .contains("`amt` \"12345.6789\" as DECIMAL(10,2)"),
+        "{}",
+        err.message
+    );
+
+    let r = go(&e, &["nulled"]).await;
+    let m = &r.replications[0].streams[0].members[0];
+    let w = m
+        .warnings
+        .iter()
+        .find(|w| w.code == "cast_set_null")
+        .expect("warning");
+    assert!(w.message.starts_with("2 values "), "{}", w.message);
+    assert_eq!(
+        q::<String>(
+            &e,
+            "SELECT string_agg(coalesce(amt::VARCHAR, '-'), ',' ORDER BY id) FROM lake.br.nulled"
+        ),
+        "12.50,-,-"
+    );
+    assert_eq!(
+        q::<String>(
+            &e,
+            "SELECT string_agg(column_name, ',' ORDER BY column_index) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = 'nulled'"
+        ),
+        "id,amt"
     );
 }

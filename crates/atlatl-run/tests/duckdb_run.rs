@@ -224,6 +224,100 @@ async fn a_missing_file_is_a_config_error() {
     assert!(!e.db.exists(), "never created");
 }
 
+const DECLARED: &str = r#"replications:
+  typed:
+    source: files
+    target: db
+    streams:
+      - id: f/typed
+        mode: full-refresh
+        from: {files: {url: "in", glob: "typed.csv"}}
+        object: br.typed
+        primary_key: [id]
+        columns: {id: {type: INTEGER}, amt: {type: "DECIMAL(10,2)"}, n: {type: BIGINT}, d: {type: DATE}}
+  legacy:
+    source: files
+    target: db
+    streams:
+      - id: f/legacy
+        mode: full-refresh
+        from: {files: {url: "in", glob: "typed.csv"}}
+        object: br.legacy
+        primary_key: [id]
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declared_types_land_exactly_or_fail() {
+    let e = setup("", DECLARED);
+    let p = e.project.path();
+    std::fs::create_dir_all(p.join("in")).expect("fs");
+    let csv = |rows: &str| {
+        std::fs::write(p.join("in/typed.csv"), format!("id,amt,n,d\n{rows}")).expect("fs")
+    };
+    let tables = || {
+        q::<i64>(
+            &e,
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'br'",
+        )
+    };
+
+    for (bad, column, value, kind) in [
+        (
+            "1,12345.6789,15,2024-01-02\n",
+            "amt",
+            "12345.6789",
+            "DECIMAL(10,2)",
+        ),
+        ("1,12345.67,1.5,2024-01-02\n", "n", "1.5", "BIGINT"),
+        (
+            "1,12345.67,15,2024-01-02 03:04:05\n",
+            "d",
+            "2024-01-02 03:04:05",
+            "DATE",
+        ),
+        (
+            "3000000000,12345.67,15,2024-01-02\n",
+            "id",
+            "3000000000",
+            "INTEGER",
+        ),
+    ] {
+        csv(bad);
+        let r = go(&e, &["typed"], false).await;
+        let err = r.replications[0].error.as_ref().expect("error");
+        assert_eq!(err.code.as_deref(), Some("cast_failed"), "{err:?}");
+        assert!(
+            err.message
+                .contains(&format!("`{column}` \"{value}\" as {kind}")),
+            "{}",
+            err.message
+        );
+        assert_eq!(tables(), 0, "nothing lands");
+    }
+
+    csv("1,12345.67,15,2024-01-02\n2,-0.5,-7,2024-01-03 00:00:00\n");
+    let r = go(&e, &["typed"], false).await;
+    ok(&r);
+    assert_eq!(
+        q::<String>(
+            &e,
+            "SELECT string_agg(concat_ws('|', id, amt, n, d), ',' ORDER BY id) FROM br.typed"
+        ),
+        "1|12345.67|15|2024-01-02,2|-0.50|-7|2024-01-03"
+    );
+
+    // An existing narrower column is the same: the target's type wins, but only exactly.
+    exec(
+        &e,
+        "CREATE TABLE br.legacy (id INTEGER, amt DECIMAL(10,2), n VARCHAR, d VARCHAR)",
+    );
+    csv("1,12345.6789,15,2024-01-02\n");
+    let r = go(&e, &["legacy"], false).await;
+    let err = r.replications[0].error.as_ref().expect("error");
+    assert_eq!(err.code.as_deref(), Some("cast_failed"), "{err:?}");
+    assert_eq!(q::<i64>(&e, "SELECT count(*) FROM br.legacy"), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delta_lands_in_a_plain_duckdb_file() {
     let e = setup(
@@ -668,7 +762,7 @@ async fn wide_integers_land_exactly_or_not_at_all() {
     let err = r.replications[0].error.as_ref().expect("error");
     assert!(
         err.message
-            .contains("stream `ch/wide256`: column `i256` is Int256, which the target can't hold"),
+            .contains("`wide`: column `i256` is Int256, which the target can't hold"),
         "{}",
         err.message
     );
@@ -678,6 +772,242 @@ async fn wide_integers_land_exactly_or_not_at_all() {
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'wide256'"
         ),
         0
+    );
+}
+
+const NETS: &str = r#"replications:
+  table:
+    source: ch
+    target: db
+    streams:
+      - {id: ch/t, mode: full-refresh, object: br.nets_t, from: {table: nets}, columns: {exclude: [ip]}}
+  query:
+    source: ch
+    target: db
+    streams:
+      - id: ch/q
+        mode: full-refresh
+        object: br.nets_q
+        from: {query: "SELECT * FROM nets ORDER BY id"}
+        columns: {exclude: [IP]}
+  include:
+    source: ch
+    target: db
+    streams:
+      - {id: ch/i, mode: full-refresh, object: br.nets_i, from: {table: nets}, columns: {include: [big, id]}}
+  missing:
+    source: ch
+    target: db
+    streams:
+      - {id: ch/m, mode: full-refresh, object: br.nets_m, from: {table: nets}, columns: {include: [id, nope]}}
+  all:
+    source: ch
+    target: db
+    streams:
+      - {id: ch/a, mode: full-refresh, object: br.nets_a, from: {table: nets}}
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn excluded_columns_are_neither_checked_nor_read() {
+    let ch = atlatl_testkit::clickhouse();
+    let chdb = ch.fresh_db().expect("ch db");
+    ch.exec(&format!(
+        "CREATE TABLE {chdb}.nets (id UInt8, ip IPv4, big Int128, name String) ENGINE = MergeTree ORDER BY id"
+    ))
+    .expect("clickhouse");
+    ch.exec(&format!(
+        "INSERT INTO {chdb}.nets VALUES (1, '10.0.0.1', '170141183460469231731687303715884105727', 'a'), (2, '10.0.0.2', '-1', 'b')"
+    ))
+    .expect("clickhouse");
+    let e = setup(
+        &format!(
+            "  ch: {{type: clickhouse, url: \"{}\", user: {}, password: {}, database: {chdb}}}\n",
+            ch.url, ch.user, ch.password
+        ),
+        NETS,
+    );
+    let r = go(&e, &["table", "query", "include"], false).await;
+    ok(&r);
+    let cols = |t: &str| {
+        q::<String>(
+            &e,
+            &format!(
+                "SELECT string_agg(column_name || ' ' || data_type, ', ' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'br' AND table_name = '{t}' AND column_name NOT LIKE '\\_%' ESCAPE '\\'"
+            ),
+        )
+    };
+    assert_eq!(cols("nets_t"), "id UTINYINT, big HUGEINT, name VARCHAR");
+    assert_eq!(cols("nets_q"), "id UTINYINT, big HUGEINT, name VARCHAR");
+    assert_eq!(cols("nets_i"), "big HUGEINT, id UTINYINT");
+    assert_eq!(
+        q::<String>(
+            &e,
+            "SELECT string_agg(id || '|' || big || '|' || name, ',' ORDER BY id) FROM br.nets_q"
+        ),
+        "1|170141183460469231731687303715884105727|a,2|-1|b"
+    );
+    let reads = ch_queries(&chdb, "nets");
+    assert!(
+        reads.len() == 3 && reads.iter().all(|q| q.contains("SELECT `id`, `big`")),
+        "{reads:?}"
+    );
+
+    let r = go(&e, &["missing"], false).await;
+    let err = r.replications[0].error.as_ref().expect("error");
+    assert!(
+        err.message.contains(
+            "stream `ch/m`: `columns.include` names `nope`, which the source doesn't return"
+        ),
+        "{}",
+        err.message
+    );
+    let r = go(&e, &["all"], false).await;
+    let err = r.replications[0].error.as_ref().expect("error");
+    assert!(
+        err.message
+            .contains("`nets`: column `ip` is IPv4, which the target can't hold"),
+        "{}",
+        err.message
+    );
+}
+
+const EARLY: &str = r#"replications:
+  early:
+    source: ch
+    target: db
+    streams:
+      - {id: ch/fine, mode: full-refresh, object: br.fine, from: {table: fine}}
+      - {id: ch/bad, mode: full-refresh, object: br.bad, from: {table: bad}, columns: {exclude: [skipped]}}
+      - id: ch/q
+        mode: full-refresh
+        object: br.q
+        from: {query: "SELECT id, toFixedString(name, 2) AS code FROM fine"}
+      - id: ch/since
+        mode: incremental
+        object: br.since
+        primary_key: [id]
+        update_key: {column: ts}
+        from: {query: "SELECT id, ts, toIPv4('10.0.0.1') AS addr, {incremental_value} AS since FROM evt WHERE ts >= coalesce({incremental_value}, toDateTime('2000-01-01', 'UTC'))"}
+  inc:
+    source: ch
+    target: db
+    streams:
+      - id: ch/inc
+        mode: incremental
+        object: br.inc
+        primary_key: [id]
+        update_key: {column: ts}
+        from: {query: "SELECT id, ts FROM evt WHERE ts >= coalesce({incremental_value}, toDateTime('2000-01-01', 'UTC'))"}
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_refused_column_is_reported_before_anything_is_read() {
+    let ch = atlatl_testkit::clickhouse();
+    let chdb = ch.fresh_db().expect("ch db");
+    ch.exec(&format!(
+        "CREATE TABLE {chdb}.fine (id UInt8, name String) ENGINE = MergeTree ORDER BY id"
+    ))
+    .expect("clickhouse");
+    ch.exec(&format!("INSERT INTO {chdb}.fine VALUES (1, 'ab')"))
+        .expect("clickhouse");
+    ch.exec(&format!(
+        "CREATE TABLE {chdb}.bad (id UInt8, ip IPv4, e Enum8('a' = 1), skipped IPv6) ENGINE = MergeTree ORDER BY id"
+    ))
+    .expect("clickhouse");
+    ch.exec(&format!(
+        "CREATE TABLE {chdb}.evt (id UInt8, ts DateTime('UTC')) ENGINE = MergeTree ORDER BY id"
+    ))
+    .expect("clickhouse");
+    ch.exec(&format!(
+        "INSERT INTO {chdb}.evt VALUES (1, '2026-10-01 00:00:00'), (2, '2026-10-02 00:00:00')"
+    ))
+    .expect("clickhouse");
+    let e = setup(
+        &format!(
+            "  ch: {{type: clickhouse, url: \"{}\", user: {}, password: {}, database: {chdb}}}\n",
+            ch.url, ch.user, ch.password
+        ),
+        EARLY,
+    );
+    // `since` is typed by the watermark alone (`Nothing` before the first one): left to the read.
+    let want = [
+        "4 source columns can't be landed as they are:",
+        "  `from.query of ch/since`: column `addr` is IPv4, which the target can't hold",
+        "  `bad`: column `ip` is IPv4, which the target can't hold",
+        "  `bad`: column `e` is Enum8('a' = 1), which the target can't hold",
+        "  `from.query of ch/q`: column `code` is FixedString(2), which the target can't hold",
+    ];
+    let has_all = |m: &str| {
+        want.iter().all(|w| m.contains(w))
+            && !m.contains("skipped")
+            && !m.contains("column `since`")
+    };
+
+    let (p, d) = atlatl_core::config::load(e.project.path());
+    assert!(!d.has_errors(), "{d:?}");
+    let vars: Arc<dyn EnvSource> = Arc::new(MapEnv::default());
+    let req = PlanRequest {
+        discover: true,
+        ..PlanRequest::all()
+    };
+    let (mut plan, _) = atlatl_core::plan::build(
+        &p,
+        &req,
+        vars.clone(),
+        atlatl_core::redact::Redactor::global(),
+    )
+    .expect("plan");
+    let err = atlatl_run::pgsrc::discover_plan(&p, &mut plan, vars)
+        .await
+        .expect_err("plan --discover checks types");
+    assert_eq!(err.code.as_deref(), Some("source_type"));
+    assert!(has_all(&err.message), "{}", err.message);
+
+    let r = go(&e, &["early"], false).await;
+    let err = r.replications[0].error.as_ref().expect("error");
+    assert!(has_all(&err.message), "{}", err.message);
+    for t in ["fine", "evt"] {
+        let reads = ch_queries(&chdb, t);
+        assert!(reads.iter().all(String::is_empty), "{t}: {reads:?}");
+    }
+    ch.exec("SYSTEM FLUSH LOGS").expect("flush");
+    let described = ch
+        .exec(&format!(
+            "SELECT count() FROM system.query_log WHERE current_database = '{chdb}' \
+             AND type = 'QueryFinish' AND query LIKE 'DESCRIBE%fine%'"
+        ))
+        .expect("clickhouse");
+    assert_eq!(
+        described, "4",
+        "two streams described by plan, two by the run"
+    );
+    assert_eq!(
+        q::<i64>(
+            &e,
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'br'"
+        ),
+        0
+    );
+
+    // A valid `{incremental_value}` query passes the early check and reads by its watermark.
+    let r = go(&e, &["inc"], false).await;
+    ok(&r);
+    assert_eq!(rows(&r, "inc").inserted, 2);
+    ch.exec(&format!(
+        "INSERT INTO {chdb}.evt VALUES (3, '2026-10-03 00:00:00')"
+    ))
+    .expect("clickhouse");
+    let r = go(&e, &["inc"], false).await;
+    ok(&r);
+    assert_eq!(rows(&r, "inc").inserted, 1);
+    assert_eq!(rows(&r, "inc").unchanged, 1, "only the max row again");
+    assert_eq!(q::<i64>(&e, "SELECT count(*) FROM br.inc"), 3);
+    let runs = ch_queries(&chdb, "evt");
+    assert!(
+        runs.last()
+            .expect("query")
+            .contains("coalesce(toDateTime64('2026-10-02 00:00:00"),
+        "{runs:?}"
     );
 }
 
@@ -872,6 +1202,253 @@ async fn max_concurrency_caps_the_connection_across_units() {
         ))
         .expect("clickhouse");
     assert_eq!(overlaps, "0");
+}
+
+const TYPED_BINDS: &str = r#"replications:
+  dec_in_narrow:
+    source: ch
+    target: db
+    streams:
+      - id: ch/dec_in_narrow
+        mode: full-refresh
+        object: br.dec_in_narrow
+        bind: {w: {query: "SELECT 1.239::DECIMAL(4,3) AS d", connection: db}}
+        from: {query: "SELECT id FROM px WHERE d IN ({{ bind.w }})"}
+  dec_values_narrow:
+    source: ch
+    target: db
+    streams:
+      - id: ch/dec_values_narrow
+        mode: full-refresh
+        object: br.dec_values_narrow
+        bind: {w: {query: "SELECT 1.239::DECIMAL(4,3) AS d", connection: db}}
+        from: {query: "SELECT * FROM values('d Decimal(5,2)', {{ bind.w }})"}
+  dec_exact:
+    source: ch
+    target: db
+    streams:
+      - id: ch/dec_exact
+        mode: full-refresh
+        object: br.dec_exact
+        bind: {w: {query: "SELECT 1.23::DECIMAL(5,2) AS d", connection: db}}
+        from:
+          query: >
+            SELECT px.id AS id, v.d AS vd FROM px JOIN values('d Decimal(5,2)', {{ bind.w }}) v ON px.d = v.d
+            WHERE px.d IN ({{ bind.w }})
+  float_exact:
+    source: ch
+    target: db
+    streams:
+      - id: ch/float_exact
+        mode: full-refresh
+        object: br.float_exact
+        bind: {w: {query: "SELECT 1.5::DOUBLE AS f", connection: db}}
+        from:
+          query: >
+            SELECT px.id AS id FROM px JOIN values('f Float64', {{ bind.w }}) v ON px.f = v.f
+            WHERE px.f IN ({{ bind.w }})
+  float32_in:
+    source: ch
+    target: db
+    streams:
+      - id: ch/float32_in
+        mode: full-refresh
+        object: br.float32_in
+        bind: {w: {query: "SELECT 0.1::DOUBLE AS g", connection: db}}
+        from: {query: "SELECT id FROM px WHERE g IN ({{ bind.w }})"}
+  float_values_dec:
+    source: ch
+    target: db
+    streams:
+      - id: ch/float_values_dec
+        mode: full-refresh
+        object: br.float_values_dec
+        bind: {w: {query: "SELECT 1.5::DOUBLE AS d", connection: db}}
+        from: {query: "SELECT * FROM values('d Decimal(5,2)', {{ bind.w }})"}
+  dec_in_float:
+    source: ch
+    target: db
+    streams:
+      - id: ch/dec_in_float
+        mode: full-refresh
+        object: br.dec_in_float
+        bind: {w: {query: "SELECT 1.5::DECIMAL(2,1) AS f", connection: db}}
+        from: {query: "SELECT id FROM px WHERE f IN ({{ bind.w }})"}
+  pg_numeric:
+    source: ch
+    target: db
+    streams:
+      - id: ch/pg_numeric
+        mode: full-refresh
+        object: br.pg_numeric
+        bind: {w: {query: "SELECT 1.5::numeric AS amt", connection: pg}}
+        from: {query: "SELECT id FROM px WHERE d IN ({{ bind.w }})"}
+  pg_domain:
+    source: ch
+    target: db
+    streams:
+      - id: ch/pg_domain
+        mode: full-refresh
+        object: br.pg_domain
+        bind: {w: {query: "SELECT 2.5::money52 AS amt", connection: pg}}
+        from: {query: "SELECT id FROM px WHERE d IN ({{ bind.w }})"}
+  pg_domain_bare:
+    source: ch
+    target: db
+    streams:
+      - id: ch/pg_domain_bare
+        mode: full-refresh
+        object: br.pg_domain_bare
+        bind: {w: {query: "SELECT 1.5::anynum AS amt", connection: pg}}
+        from: {query: "SELECT id FROM px WHERE d IN ({{ bind.w }})"}
+  dec_in_string:
+    source: ch
+    target: db
+    streams:
+      - id: ch/dec_in_string
+        mode: full-refresh
+        object: br.dec_in_string
+        bind: {w: {query: "SELECT 1.23::DECIMAL(5,2) AS s", connection: db}}
+        from: {query: "SELECT id FROM px WHERE s IN ({{ bind.w }})"}
+  varchar_in_string:
+    source: ch
+    target: db
+    streams:
+      - id: ch/varchar_in_string
+        mode: full-refresh
+        object: br.varchar_in_string
+        bind: {w: {query: "SELECT 1.23::DECIMAL(5,2)::VARCHAR AS s", connection: db}}
+        from: {query: "SELECT id FROM px WHERE s IN ({{ bind.w }})"}
+  pg_numeric_typed:
+    source: ch
+    target: db
+    streams:
+      - id: ch/pg_numeric_typed
+        mode: full-refresh
+        object: br.pg_numeric_typed
+        bind: {w: {query: "SELECT 2.5::numeric(3,1) AS amt", connection: pg}}
+        from: {query: "SELECT id FROM px WHERE d IN ({{ bind.w }})"}
+"#;
+
+/// Fractional bind values are typed by their bind query's column: a decimal compares exactly
+/// (never truncated to a narrower column) and a float as the column's own float type.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bind_numbers_compare_exactly_or_fail_loudly() {
+    let ch = atlatl_testkit::clickhouse();
+    let chdb = ch.fresh_db().expect("ch db");
+    let pg = atlatl_testkit::pg16();
+    let pgdb = pg.fresh_db().expect("pg db");
+    ch.exec(&format!(
+        "CREATE TABLE {chdb}.px (id UInt8, d Decimal(5,2), f Float64, g Float32, s String) ENGINE = MergeTree ORDER BY id"
+    ))
+    .expect("clickhouse");
+    ch.exec(&format!(
+        "INSERT INTO {chdb}.px VALUES (1, 1.23, 1.5, 0.1, '1.23'), (2, 2.50, 2.25, 0.2, '2.5')"
+    ))
+    .expect("clickhouse");
+    let e = setup(
+        &format!(
+            "  ch: {{type: clickhouse, url: \"{}\", user: {}, password: {}, database: {chdb}}}\n  pg: {{type: postgres, host: {}, port: {}, database: {pgdb}, user: {}, password: \"{}\", sslmode: disable}}\n",
+            ch.url, ch.user, ch.password, pg.host, pg.port, pg.user, pg.password
+        ),
+        TYPED_BINDS,
+    );
+    let ids = |t: &str| {
+        q::<String>(
+            &e,
+            &format!("SELECT coalesce(string_agg(id::VARCHAR, ',' ORDER BY id), '') FROM br.{t}"),
+        )
+    };
+    let fails = async |rep: &str| {
+        let r = go(&e, &[rep], false).await;
+        r.replications[0].error.clone().expect("error").message
+    };
+
+    let m = fails("dec_values_narrow").await;
+    assert!(
+        m.contains("stream `ch/dec_values_narrow`: `bind.w` is spliced into `values()` where its column `d` (DECIMAL(4,3)) meets structure column `d Decimal(5,2)`, which would round it to 2 digits; widen the structure's scale, or round in the bind query"),
+        "{m}"
+    );
+    // Refused while rendering: ClickHouse never saw the query, not even to describe it.
+    ch.exec("SYSTEM FLUSH LOGS").expect("flush");
+    let seen = ch
+        .exec(&format!(
+            "SELECT count() FROM system.query_log WHERE current_database = '{chdb}' AND query LIKE '%1.239%' AND query NOT LIKE '%query_log%'"
+        ))
+        .expect("clickhouse");
+    assert_eq!(seen, "0");
+
+    // 1.239 is no Decimal(5,2) 1.23: before, `IN ('1.239')` truncated it and matched.
+    let r = go(&e, &["dec_in_narrow"], false).await;
+    ok(&r);
+    assert_eq!(ids("dec_in_narrow"), "");
+
+    let r = go(&e, &["dec_exact"], false).await;
+    ok(&r);
+    assert_eq!(
+        q::<String>(
+            &e,
+            "SELECT string_agg(id || ':' || vd, ',') FROM br.dec_exact"
+        ),
+        "1:1.23"
+    );
+
+    let r = go(&e, &["float_exact"], false).await;
+    ok(&r);
+    assert_eq!(ids("float_exact"), "1");
+    // A quoted 0.1 is parsed as the column's Float32, which a Float64 literal would miss.
+    let r = go(&e, &["float32_in"], false).await;
+    ok(&r);
+    assert_eq!(ids("float32_in"), "1");
+
+    let m = fails("float_values_dec").await;
+    assert!(
+        m.contains("where its column `d` (DOUBLE) meets structure column `d Decimal(5,2)`, which would round it to the structure's scale"),
+        "{m}"
+    );
+
+    let m = fails("dec_in_float").await;
+    assert!(m.contains("TYPE_MISMATCH"), "{m}");
+    assert!(
+        m.contains("hint: `bind.w` column `f` (DECIMAL(2,1)) is sent as a typed `Decimal`, which ClickHouse won't compare with a float or integer column; cast it in the bind query to match (`CAST(x AS DOUBLE)` for a float column)"),
+        "{m}"
+    );
+
+    let m = fails("pg_numeric").await;
+    assert!(
+        m.contains("stream `ch/pg_numeric`: `bind.w`: column `amt` is numeric without a precision and scale, so its values have no exact ClickHouse type; cast it in the bind query (`amt::numeric(18,4)`, or `amt::float8`)"),
+        "{m}"
+    );
+    let r = go(&e, &["pg_numeric_typed"], false).await;
+    ok(&r);
+    assert_eq!(ids("pg_numeric_typed"), "2");
+
+    // Domains count as their base type, through a domain over a domain.
+    let (c, conn) = tokio_postgres::connect(&pg.dsn(&pgdb), tokio_postgres::NoTls)
+        .await
+        .expect("pg");
+    tokio::spawn(conn);
+    c.batch_execute(
+        "CREATE DOMAIN num52 AS numeric(5,2); CREATE DOMAIN money52 AS num52; CREATE DOMAIN anynum AS numeric",
+    )
+    .await
+    .expect("domains");
+    let r = go(&e, &["pg_domain"], false).await;
+    ok(&r);
+    assert_eq!(ids("pg_domain"), "2");
+    let m = fails("pg_domain_bare").await;
+    assert!(
+        m.contains("column `amt` is numeric without a precision and scale"),
+        "{m}"
+    );
+
+    // A typed decimal never matches a String column, silently; as text it does.
+    let r = go(&e, &["dec_in_string"], false).await;
+    ok(&r);
+    assert_eq!(ids("dec_in_string"), "");
+    let r = go(&e, &["varchar_in_string"], false).await;
+    ok(&r);
+    assert_eq!(ids("varchar_in_string"), "1");
 }
 
 /// Postgres keeps both columns in `to_json(row)` under one key, so one would be lost (DuckDB

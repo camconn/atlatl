@@ -13,8 +13,20 @@ pub fn qualified(parts: &[&str]) -> String {
     parts.iter().map(|p| ident(p)).collect::<Vec<_>>().join(".")
 }
 
+/// Marks an `error()` raised by [`crate::drift::exact_cast`].
+pub const CAST_FAILED: &str = "atlatl:cast_failed:";
+
+/// The `cast_failed` data error an [`crate::drift::exact_cast`] raised, if this is one.
+pub fn cast_failed(msg: &str) -> Option<AtlatlError> {
+    let i = msg.find(CAST_FAILED)?;
+    Some(AtlatlError::data(&msg[i + CAST_FAILED.len()..]).code("cast_failed"))
+}
+
 pub fn db(e: duckdb::Error) -> AtlatlError {
     let msg = atlatl_core::redact::redact(&e.to_string()).into_owned();
+    if let Some(e) = cast_failed(&msg) {
+        return e;
+    }
     let class = if msg.starts_with("Conversion Error") || msg.starts_with("Constraint Error") {
         ErrorClass::Data
     } else if msg.starts_with("Catalog Error")

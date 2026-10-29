@@ -326,13 +326,35 @@ pub(crate) async fn query_rows(
     sql: &str,
     conn: &str,
 ) -> Result<Vec<String>> {
+    Ok(query_typed(rt, session, sql, conn, false).await?.1)
+}
+
+/// Each column's type by position, a domain (over a domain…) resolved to its base type with the
+/// innermost typmod, as ingest resolves table columns.
+const BIND_TYPES_SQL: &str = "WITH RECURSIVE b(n, oid, typmod) AS ( \
+       SELECT n, t, m FROM unnest($1::oid[], $2::int4[]) WITH ORDINALITY AS u(t, m, n) \
+       UNION ALL \
+       SELECT b.n, t.typbasetype, t.typtypmod FROM b \
+       JOIN pg_catalog.pg_type t ON t.oid = b.oid WHERE t.typtype = 'd') \
+     SELECT format_type(b.oid, b.typmod) FROM b \
+     JOIN pg_catalog.pg_type t ON t.oid = b.oid WHERE t.typtype <> 'd' ORDER BY n";
+
+/// Result columns (name, type) and rows as JSON text.
+type Typed = (Vec<(String, String)>, Vec<String>);
+
+/// `query_rows`, with each result column's name and type when `typed`: DuckDB's type names for a
+/// lake or DuckDB file, Postgres's `format_type` (typmod included) for Postgres.
+pub(crate) async fn query_typed(
+    rt: &Runtime,
+    session: &mut Session,
+    sql: &str,
+    conn: &str,
+    typed: bool,
+) -> Result<Typed> {
+    let describe = typed.then(|| format!("DESCRIBE SELECT * FROM ({sql}) q"));
     Ok(if let Some(lake) = rt.lakes.get(conn) {
         let q = format!("SELECT to_json(q)::VARCHAR FROM ({sql}) q");
-        let read = move |c: &mut duckdb::Connection| {
-            let mut s = c.prepare(&q).map_err(db)?;
-            let rows = s.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
-            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
-        };
+        let read = move |c: &mut duckdb::Connection| duck_read(c, describe.as_deref(), &q);
         if lake.is_plain() {
             // Inside the file, as when it is opened on its own: `USE` on a throwaway connection
             // (closed when dropped), so no shared session is left resolving names in the file.
@@ -359,6 +381,7 @@ pub(crate) async fn query_rows(
         if let ConnectionKind::Duckdb(d) = &c.kind {
             duckdb_items(
                 d.path.clone(),
+                describe,
                 format!("SELECT to_json(q)::VARCHAR FROM ({sql}) q"),
             )
             .await?
@@ -371,19 +394,62 @@ pub(crate) async fn query_rows(
             }
             let opts = atlatl_conn_postgres::ConnectOptions::from_connection(c)?;
             let pg = atlatl_conn_postgres::connect(&opts).await?;
+            let types = if typed {
+                let st = pg
+                    .client()
+                    .prepare(sql)
+                    .await
+                    .map_err(atlatl_conn_postgres::wrap)?;
+                let oids: Vec<u32> = st.columns().iter().map(|c| c.type_().oid()).collect();
+                let mods: Vec<i32> = st.columns().iter().map(|c| c.type_modifier()).collect();
+                let names = pg
+                    .client()
+                    .query(BIND_TYPES_SQL, &[&oids, &mods])
+                    .await
+                    .map_err(atlatl_conn_postgres::wrap)?;
+                st.columns()
+                    .iter()
+                    .zip(names)
+                    .map(|(c, r)| (c.name().to_owned(), r.get::<_, String>(0)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let rows = pg
                 .client()
                 .query(&format!("SELECT to_json(q)::text FROM ({sql}) q"), &[])
                 .await
                 .map_err(atlatl_conn_postgres::wrap)?;
-            rows.iter()
+            let rows = rows
+                .iter()
                 .map(|r| {
                     r.try_get::<_, String>(0)
                         .map_err(atlatl_conn_postgres::wrap)
                 })
-                .collect::<Result<_>>()?
+                .collect::<Result<_>>()?;
+            (types, rows)
         }
     })
+}
+
+fn duck_read(c: &mut duckdb::Connection, describe: Option<&str>, q: &str) -> Result<Typed> {
+    let types = match describe {
+        Some(d) => {
+            let mut s = c.prepare(d).map_err(db)?;
+            let rows = s
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db)?
+        }
+        None => Vec::new(),
+    };
+    let mut s = c.prepare(q).map_err(db)?;
+    let rows = s.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
+    let rows = rows
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(db)?;
+    Ok((types, rows))
 }
 
 /// `items` minus those whose `except_landed` values (as text) are already in the stream's target
@@ -435,7 +501,7 @@ async fn except_landed_items(
 
 /// Rows of `q` from a DuckDB file opened read-only in its own database, so a writer elsewhere
 /// fails the open rather than racing it.
-async fn duckdb_items(path: String, q: String) -> Result<Vec<String>> {
+async fn duckdb_items(path: String, describe: Option<String>, q: String) -> Result<Typed> {
     tokio::task::spawn_blocking(move || {
         if !std::path::Path::new(&path).is_file() {
             return Err(AtlatlError::config(format!(
@@ -446,10 +512,8 @@ async fn duckdb_items(path: String, q: String) -> Result<Vec<String>> {
             .access_mode(duckdb::AccessMode::ReadOnly)
             .and_then(|c| c.enable_autoload_extension(false))
             .map_err(db)?;
-        let c = duckdb::Connection::open_with_flags(&path, cfg).map_err(db)?;
-        let mut s = c.prepare(&q).map_err(db)?;
-        let rows = s.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+        let mut c = duckdb::Connection::open_with_flags(&path, cfg).map_err(db)?;
+        duck_read(&mut c, describe.as_deref(), &q)
     })
     .await
     .map_err(|e| AtlatlError::internal(format!("duckdb query task: {e}")))?

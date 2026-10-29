@@ -1,13 +1,21 @@
-use atlatl_conn_pgrepl::StopReason;
+use atlatl_conn_pgrepl::{StopReason, StreamSpec};
 use atlatl_core::config::model::DeleteMode;
 
-use crate::{Env, stream, versions};
+use crate::{Env, columns, stream, versions};
 
 pub const TYPES_DDL: &str = r#"
 CREATE TABLE t (id int PRIMARY KEY, n numeric(12,3), t text, ts timestamptz, d date, j jsonb,
                 arr int[], b bool, f float8, u uuid, by bytea, i8 bigint);
 CREATE TABLE other (k text PRIMARY KEY, v int);
 "#;
+
+/// `t`, its array opted in as its Postgres text.
+pub fn t_stream() -> StreamSpec {
+    StreamSpec {
+        columns: columns(serde_json::json!({"arr": {"type": "VARCHAR"}})),
+        ..stream("t")
+    }
+}
 
 pub const T_INSERT: &str = r#"
 INSERT INTO t VALUES
@@ -23,7 +31,7 @@ pub const T_ROWS: &str = "SELECT id::VARCHAR || '|' || coalesce(n::VARCHAR, '∅
     FROM lake.br.t ORDER BY id";
 
 pub const T_WANT: [&str; 2] = [
-    "1|12.345|x|2024-03-10 12:00:00.123456+00|2024-01-31|{\"k\": [1, 2]}|[1, 2, NULL]|true|1.5|a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11|\\x00\\x01|9007199254740993|insert",
+    "1|12.345|x|2024-03-10 12:00:00.123456+00|2024-01-31|{\"k\": [1, 2]}|{1,2,NULL}|true|1.5|a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11|\\x00\\x01|9007199254740993|insert",
     "2|-0.500|∅|∅|∅|∅|∅|∅|∅|∅|∅|∅|insert",
 ];
 
@@ -32,7 +40,7 @@ async fn stream_and_apply(v: u32) {
     env.exec(TYPES_DDL).await;
     env.exec(T_INSERT).await;
     env.exec("INSERT INTO other VALUES ('a', 1)").await;
-    let spec = env.spec(vec![stream("t"), stream("other")]);
+    let spec = env.spec(vec![t_stream(), stream("other")]);
 
     let r = env.run(spec.clone()).await;
     let w = &r.applied.window;
@@ -52,7 +60,7 @@ async fn stream_and_apply(v: u32) {
             "ts TIMESTAMP WITH TIME ZONE",
             "d DATE",
             "j JSON",
-            "arr INTEGER[]",
+            "arr VARCHAR",
             "b BOOLEAN",
             "f DOUBLE",
             "u UUID",
@@ -118,7 +126,7 @@ versions!(stream_and_apply);
 async fn values_arrive_typed_through_pgoutput(v: u32) {
     let env = Env::new(v).await;
     env.exec(TYPES_DDL).await;
-    let spec = env.spec(vec![stream("t")]);
+    let spec = env.spec(vec![t_stream()]);
     let r = env.run(spec.clone()).await;
     assert_eq!(r.applied.window.backfilled, vec!["pg/t"]);
     assert_eq!(r.applied.streams[0].counts.inserted, 0);

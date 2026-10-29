@@ -54,6 +54,9 @@ fn http_status(msg: &str) -> Option<u16> {
 
 pub fn duck(e: duckdb::Error) -> AtlatlError {
     let msg = redact(&e.to_string()).into_owned();
+    if let Some(e) = atlatl_ingest::sql::cast_failed(&msg) {
+        return e;
+    }
     AtlatlError::new(classify_duck(&msg), msg)
 }
 

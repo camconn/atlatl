@@ -349,6 +349,7 @@ async fn prepare(
     attempt: u32,
     cancel: &CancellationToken,
     unloads: &Unloads,
+    mut admitted: Option<Admitted>,
 ) -> Result<Work> {
     let c = &s.config;
     // `rejects retry` lands only the replayed rows: merged by key (appended without one), never
@@ -523,6 +524,10 @@ async fn prepare(
                 ch,
                 ch_mark.as_ref(),
                 first_run,
+                match admitted.take() {
+                    Some(Admitted::Clickhouse(d)) => Some(d),
+                    _ => None,
+                },
                 cancel,
             )
             .await?;
@@ -531,7 +536,11 @@ async fn prepare(
         }
         (Src::Redshift(rs), Some(_), _) => {
             let object = atlatl_conn_redshift::Object::parse(&m.name);
-            let cols = rs.columns(&m.name, cancel).await?;
+            let cols = match admitted.take() {
+                Some(Admitted::Redshift(cols)) => cols,
+                _ => redshift_admitted(&s.config, rs.columns(&m.name, cancel).await?)
+                    .map_err(|l| crate::pgsrc::source_types(&m.name, l))?,
+            };
             rs_cols = Some((rs.clone(), object, cols));
             String::new()
         }
@@ -561,8 +570,12 @@ async fn prepare(
 
     let src = match source {
         Src::Postgres(pg) => {
+            let cols = match admitted.take() {
+                Some(Admitted::Postgres(cols)) => Some(cols),
+                _ => None,
+            };
             let r = pg
-                .relation(s, sp, m, pg_cursor.as_ref().map(|(_, c)| c))
+                .relation(s, sp, m, cols, pg_cursor.as_ref().map(|(_, c)| c), &filters)
                 .await?;
             if let (true, Some((i, _))) = (r.pushed, &pg_cursor) {
                 filters.remove(*i);
@@ -576,7 +589,6 @@ async fn prepare(
     let mut rs_expected: Option<u64> = None;
     let src = match rs_cols {
         Some((rs, object, cols)) => {
-            let cols = narrow_columns(&s.config, cols);
             let r = if rs.unloads() {
                 unload_member(
                     rt,
@@ -615,18 +627,35 @@ async fn prepare(
         }
         None => src,
     };
-    // Redshift and postgres tables narrow `columns` at the source.
-    let projection = if is_rs || (is_pg && m.query.is_none()) {
+    // Redshift and postgres narrow `columns` at the source; ClickHouse drops excluded ones.
+    // A files column's `on_cast_error.set_null` flag goes with it.
+    let nulled = file_set
+        .as_ref()
+        .map(|f| f.set.nulled())
+        .unwrap_or_default();
+    let with_flags = |names: Vec<String>| {
+        let flags: Vec<String> = names
+            .iter()
+            .filter_map(|n| nulled.iter().find(|a| a.eq_ignore_ascii_case(n)))
+            .map(|a| format!("{}{a}", atlatl_core::config::model::CAST_NULLED))
+            .collect();
+        names
+            .into_iter()
+            .chain(flags)
+            .map(|i| ident(&i))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let projection = if is_rs || is_pg {
         "*".to_owned()
     } else {
         match c.columns.as_ref().and_then(|cc| cc.include.clone()) {
-            Some(inc) => inc.iter().map(|i| ident(i)).collect::<Vec<_>>().join(", "),
+            Some(inc) => with_flags(inc),
             None => match c.columns.as_ref().and_then(|cc| cc.exclude.clone()) {
-                Some(ex) => format!(
-                    "* EXCLUDE ({})",
-                    ex.iter().map(|i| ident(i)).collect::<Vec<_>>().join(", ")
-                ),
-                None => "*".into(),
+                Some(ex) if !matches!(source, Src::Clickhouse(_)) => {
+                    format!("* EXCLUDE ({})", with_flags(ex))
+                }
+                _ => "*".into(),
             },
         }
     };
@@ -708,11 +737,9 @@ async fn prepare(
         declared.entry(n.clone()).or_insert_with(|| t.clone());
     }
     let policy = Policy::from(c.table_drift.as_ref());
-    let set_null = c
-        .on_cast_error
-        .as_ref()
-        .and_then(|e| e.set_null)
-        .unwrap_or(false);
+    let set_null = c.set_null();
+    let nulled = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let nulled_n = nulled.clone();
     let duplicates = c
         .duplicates
         .unwrap_or(atlatl_core::config::model::Duplicates::Fail);
@@ -824,6 +851,12 @@ async fn prepare(
                     |c| staging::stage_query(c, &stg, &select),
                 )?
             };
+            if set_null {
+                nulled_n.fetch_add(
+                    drift::take_nulled(conn, &stg)?,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
             if let Some(want) = expected_rows
                 && want != n
             {
@@ -838,7 +871,10 @@ async fn prepare(
             let deduped = validate::duplicates(conn, &stg, &pk_o, duplicates, &order_by)?;
             let n = n - skipped - deduped;
             let a = drift::plan(&cols, target_cols.as_deref(), policy, &declared)?;
-            drift::check_casts(conn, &stg, &a, set_null)?;
+            nulled_n.fetch_add(
+                drift::check_casts(conn, &stg, &a, set_null)?,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             let mut skip = false;
             if kind == Kind::FullRefresh {
                 let t_rows = if target_cols.is_some() {
@@ -872,6 +908,15 @@ async fn prepare(
         check_source_schema(rt, session, who, doc, exclude.clone(), schema_rel).await?;
     }
     let (adoption, source, chunks, staged, skip, new_max) = checked?;
+    let n = nulled.load(std::sync::atomic::Ordering::Relaxed);
+    if n > 0 {
+        rt.report.member(&rep.name, &sp.id, &m.name, |r| {
+            r.warn(
+                "cast_set_null",
+                format!("{n} values didn't fit their types exactly and landed as NULL (`on_cast_error.set_null`)"),
+            );
+        });
+    }
     if let Some(doc) = &s.schema
         && !skip
         && chunks.is_empty()
@@ -1094,24 +1139,205 @@ async fn unload_member(
 }
 
 /// `columns.include`/`exclude` applied to the source columns (pushed into the Redshift select).
+/// A Redshift member's columns narrowed by `columns`, `super` opted in by its declared type; the
+/// lines name every column still refused.
+fn redshift_admitted(
+    c: &atlatl_core::config::model::StreamConfig,
+    cols: Vec<atlatl_conn_redshift::SourceColumn>,
+) -> std::result::Result<Vec<atlatl_conn_redshift::SourceColumn>, Vec<String>> {
+    let cc = c.columns.as_ref();
+    atlatl_conn_redshift::catalog::admit(narrow_columns(c, cols), &|n| {
+        cc.and_then(|c| c.declared(n)).map(str::to_owned)
+    })
+}
+
+/// A member's admitted source columns from the early check, reused when it's staged.
+enum Admitted {
+    Redshift(Vec<atlatl_conn_redshift::SourceColumn>),
+    Postgres(Vec<atlatl_conn_postgres::source::SourceColumn>),
+    Clickhouse(atlatl_conn_clickhouse::Described),
+}
+
+type Resolved = std::collections::HashMap<(usize, usize), Vec<(MemberPlan, Option<Admitted>)>>;
+
+/// Every Postgres, Redshift and ClickHouse member's columns, checked against what the target holds
+/// once the source catalog is known and before anything is read: one `config` error names every
+/// refused column across the unit. Returns the resolved members with their admitted columns, so
+/// discovery and each catalog lookup run once per attempt. ClickHouse members whose columns hang
+/// on runtime values (`clickhouse_select`) are checked as they're read.
+async fn check_source_types(
+    rt: &Runtime,
+    session: &mut Session,
+    unit: &[&ReplicationPlan],
+    src: &Src,
+    cancel: &CancellationToken,
+) -> Result<Resolved> {
+    let mut resolved = std::collections::HashMap::new();
+    let (rs, pg, ch) = match src {
+        Src::Redshift(r) => (Some(r.as_ref()), None, None),
+        Src::Postgres(p) => (None, Some(p.as_ref()), None),
+        Src::Clickhouse(c) => (None, None, Some(c.as_ref())),
+        _ => return Ok(resolved),
+    };
+    let mut found: Vec<(String, String)> = Vec::new();
+    for (ri, rep) in unit.iter().enumerate() {
+        for (si, sp) in rep.streams.iter().enumerate() {
+            if cancel.is_cancelled() {
+                return Err(AtlatlError::new(ErrorClass::Killed, "cancelled"));
+            }
+            let s = rt.stream(&sp.id)?;
+            if sp.role == StreamRole::FeedOnly
+                || matches!(s.config.mode.as_ref().map(|m| m.value), Some(Mode::Cdc))
+            {
+                continue;
+            }
+            let ms = members(
+                rt,
+                session,
+                "",
+                rs,
+                pg,
+                cancel,
+                s,
+                sp,
+                rep.instance.as_ref(),
+            )
+            .await?;
+            let mut out = Vec::with_capacity(ms.len());
+            for m in ms {
+                let (label, cols) = match (rs, pg, ch) {
+                    (_, _, Some(ch)) => {
+                        match clickhouse_admitted(ch, &s.config, sp, &m, cancel).await? {
+                            Some((label, cols)) => {
+                                (label, cols.map(|d| d.map(Admitted::Clickhouse)))
+                            }
+                            None => {
+                                out.push((m, None));
+                                continue;
+                            }
+                        }
+                    }
+                    (Some(rs), ..) if m.table.is_some() => (
+                        m.name.clone(),
+                        redshift_admitted(&s.config, rs.columns(&m.name, cancel).await?)
+                            .map(|c| Some(Admitted::Redshift(c))),
+                    ),
+                    (_, Some(pg), _) => {
+                        let (label, cols) = crate::pgsrc::admitted(&pg.source, s, sp, &m).await?;
+                        (label, cols.map(|c| Some(Admitted::Postgres(c))))
+                    }
+                    _ => {
+                        out.push((m, None));
+                        continue;
+                    }
+                };
+                match cols {
+                    Ok(c) => out.push((m, c)),
+                    Err(lines) => {
+                        found.extend(lines.into_iter().map(|l| (label.clone(), l)));
+                        out.push((m, None));
+                    }
+                }
+            }
+            resolved.insert((ri, si), out);
+        }
+    }
+    if found.is_empty() {
+        Ok(resolved)
+    } else {
+        Err(atlatl_conn_postgres::types::refused(&found))
+    }
+}
+
+/// What a clickhouse member's refusals name it by.
+fn clickhouse_label(sp: &StreamPlan, m: &MemberPlan) -> String {
+    match &m.query {
+        Some(_) => format!("from.query of {}", sp.id),
+        None => m.name.clone(),
+    }
+}
+
+/// The select a clickhouse member's columns can be described from before anything is read, and
+/// whether it stands in for the watermark; `None` when they hang on `bind` results, or `from.query`
+/// sets a setting atlatl owns (refused when it's read). The watermark condition filters rows only,
+/// so it reads as `1=1`; `{incremental_value}` reads as `NULL`, as before the first watermark.
+fn clickhouse_select(
+    c: &atlatl_core::config::model::StreamConfig,
+    m: &MemberPlan,
+) -> Option<(String, bool)> {
+    use atlatl_core::template::{INCREMENTAL_VALUE, INCREMENTAL_WHERE_COND};
+    if c.bind.as_ref().is_some_and(|b| !b.is_empty()) {
+        return None;
+    }
+    match (&m.query, &m.table) {
+        (Some(q), _) if atlatl_conn_clickhouse::sets_owned_setting(q).is_some() => None,
+        (Some(q), _) => Some((
+            q.replace(INCREMENTAL_WHERE_COND, "1=1")
+                .replace(INCREMENTAL_VALUE, "NULL"),
+            q.contains(INCREMENTAL_VALUE),
+        )),
+        (None, Some(_)) => Some((
+            format!(
+                "SELECT * FROM {}",
+                atlatl_conn_clickhouse::table_name(&m.name)
+            ),
+            false,
+        )),
+        (None, None) => None,
+    }
+}
+
+/// A clickhouse member's landing columns checked before anything is read: its label, and the
+/// `DESCRIBE` to reuse when it's read or every refused column. `None` when its columns can't be
+/// known up front. With `{incremental_value}` read as `NULL`, a column typed from it alone
+/// (`Nothing` anywhere in its type) is left to the read, and the `DESCRIBE` isn't reused, since a
+/// stored watermark may type other columns differently too.
+pub(crate) async fn clickhouse_admitted(
+    ch: &atlatl_conn_clickhouse::ClickHouse,
+    c: &atlatl_core::config::model::StreamConfig,
+    sp: &StreamPlan,
+    m: &MemberPlan,
+    cancel: &CancellationToken,
+) -> Result<
+    Option<(
+        String,
+        std::result::Result<Option<atlatl_conn_clickhouse::Described>, Vec<String>>,
+    )>,
+> {
+    let Some((sql, stand_in)) = clickhouse_select(c, m) else {
+        return Ok(None);
+    };
+    let d = ch.describe(&sql, cancel).await?;
+    let landing: Vec<_> = d
+        .columns
+        .iter()
+        .filter(|(n, t)| lands(c, n) && !(stand_in && t.contains("Nothing")))
+        .cloned()
+        .collect();
+    let cols = atlatl_conn_clickhouse::types::check(&landing).map(|_| (!stand_in).then_some(d));
+    Ok(Some((clickhouse_label(sp, m), cols)))
+}
+
 fn narrow_columns(
     c: &atlatl_core::config::model::StreamConfig,
     cols: Vec<atlatl_conn_redshift::SourceColumn>,
 ) -> Vec<atlatl_conn_redshift::SourceColumn> {
-    let include = c.columns.as_ref().and_then(|cc| cc.include.clone());
-    let exclude = c
-        .columns
+    cols.into_iter().filter(|col| lands(c, &col.name)).collect()
+}
+
+/// Whether `columns.include`/`exclude` keep source column `name`.
+fn lands(c: &atlatl_core::config::model::StreamConfig, name: &str) -> bool {
+    let Some(cc) = c.columns.as_ref() else {
+        return true;
+    };
+    cc.include
         .as_ref()
-        .and_then(|cc| cc.exclude.clone())
-        .unwrap_or_default();
-    cols.into_iter()
-        .filter(|col| {
-            include
-                .as_ref()
-                .is_none_or(|i| i.iter().any(|n| n.eq_ignore_ascii_case(&col.name)))
-        })
-        .filter(|col| !exclude.iter().any(|n| n.eq_ignore_ascii_case(&col.name)))
-        .collect()
+        .is_none_or(|i| i.iter().any(|n| n.eq_ignore_ascii_case(name)))
+        && !cc
+            .exclude
+            .iter()
+            .flatten()
+            .any(|n| n.eq_ignore_ascii_case(name))
 }
 
 /// Appends export batches to a raw table on the unit's engine session.
@@ -1213,6 +1439,7 @@ async fn clickhouse_member(
     ch: &atlatl_conn_clickhouse::ClickHouse,
     mark: Option<&atlatl_conn_clickhouse::incremental::Watermark>,
     first_run: bool,
+    admitted: Option<atlatl_conn_clickhouse::Described>,
     cancel: &CancellationToken,
 ) -> Result<(String, std::path::PathBuf)> {
     use atlatl_conn_clickhouse::bind::{Bound, render};
@@ -1243,8 +1470,14 @@ async fn clickhouse_member(
             Some(f) if first_run => f,
             _ => &b.query,
         };
-        let texts = crate::rest::query_rows(rt, session, query, &b.connection).await?;
-        let items = bind_rows(&texts)
+        let (types, texts) =
+            crate::rest::query_typed(rt, session, query, &b.connection, true).await?;
+        let (cols, items) = bind_cols(&types)
+            .and_then(|cols| {
+                let items = bind_rows(&texts)?;
+                bind_fractions(&cols, &items)?;
+                Ok((cols, items))
+            })
             .map_err(|e| AtlatlError::config(format!("stream `{}`: `bind.{name}`: {e}", sp.id)))?;
         if items.is_empty() {
             rt.report.member(&rep.name, &sp.id, &m.name, |r| {
@@ -1258,8 +1491,11 @@ async fn clickhouse_member(
         }
         let bound = Bound {
             name: name.clone(),
+            cols,
             rows: items,
         };
+        atlatl_conn_clickhouse::bind::check_values(&sql, &bound)
+            .map_err(|e| AtlatlError::config(format!("stream `{}`: {e}", sp.id)))?;
         // Plan checks allow one batched list, with a batch of at least 1.
         match b
             .batch
@@ -1280,17 +1516,71 @@ async fn clickhouse_member(
     }
     let queries = render(&sql, &whole, batched.as_ref().map(|(b, n)| (b, *n)));
     // Every batch has the first one's columns.
-    let described = ch.describe(&queries[0], cancel).await?;
+    let decimals: Vec<String> = whole
+        .iter()
+        .chain(batched.as_ref().map(|(b, _)| b))
+        .flat_map(|b| {
+            b.cols
+                .iter()
+                .filter(|c| matches!(c.num, atlatl_conn_clickhouse::bind::Num::Decimal(..)))
+                .map(move |c| format!("`bind.{}` column `{}` ({})", b.name, c.name, c.ty))
+        })
+        .collect();
+    let hint = |mut e: AtlatlError| {
+        if e.code.as_deref() == Some("clickhouse_53") && !decimals.is_empty() {
+            e.message.push_str(&format!(
+                "\nhint: {} is sent as a typed `Decimal`, which ClickHouse won't compare with a float or integer column; cast it in the bind query to match (`CAST(x AS DOUBLE)` for a float column)",
+                decimals.join(", ")
+            ));
+        }
+        e
+    };
+    let described = match admitted {
+        Some(d) => d,
+        None => ch.describe(&queries[0], cancel).await.map_err(hint)?,
+    };
     rt.report.member(&rep.name, &sp.id, &m.name, |r| {
         for a in &described.retries {
             r.record_retry(a);
         }
     });
-    let wide = atlatl_conn_clickhouse::types::check(&described.columns)
-        .map_err(|e| AtlatlError::config(format!("stream `{}`: {}", sp.id, e.message)))?;
+    let landing: Vec<(String, String)> = described
+        .columns
+        .iter()
+        .filter(|(n, _)| lands(&s.config, n))
+        .cloned()
+        .collect();
+    if let Some(inc) = s.config.columns.as_ref().and_then(|cc| cc.include.as_ref())
+        && let Some(miss) = inc
+            .iter()
+            .find(|i| !landing.iter().any(|(n, _)| n.eq_ignore_ascii_case(i)))
+    {
+        return Err(AtlatlError::config(format!(
+            "stream `{}`: `columns.include` names `{miss}`, which the source doesn't return",
+            sp.id
+        )));
+    }
+    let wide = atlatl_conn_clickhouse::types::check(&landing)
+        .map_err(|l| crate::pgsrc::source_types(&clickhouse_label(sp, m), l))?;
+    let narrowed = (landing.len() < described.columns.len()).then(|| {
+        landing
+            .iter()
+            .map(|(n, _)| atlatl_conn_clickhouse::ident(n))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
     let queries: Vec<String> = queries
         .iter()
-        .map(|q| atlatl_conn_clickhouse::types::stringify(q, &wide))
+        .map(|q| {
+            let q = match &narrowed {
+                Some(cols) => format!(
+                    "SELECT {cols} FROM ({}\n)",
+                    atlatl_conn_clickhouse::types::trimmed(q)
+                ),
+                None => q.clone(),
+            };
+            atlatl_conn_clickhouse::types::stringify(&q, &wide)
+        })
         .collect();
     static UNIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = UNIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1307,7 +1597,7 @@ async fn clickhouse_member(
         .map(|(i, q)| {
             let path = dir.join(format!("{i:05}.parquet"));
             async move {
-                let got = ch.query_to_file(q, &path, cancel).await?;
+                let got = ch.query_to_file(q, &path, cancel).await.map_err(hint)?;
                 Ok::<_, AtlatlError>((path, got))
             }
         })
@@ -1366,6 +1656,82 @@ fn bind_rows(texts: &[String]) -> std::result::Result<Vec<Vec<Lit>>, String> {
                 .collect()
         })
         .collect()
+}
+
+/// How each bind column's numbers are written, from its type in the bind query (DuckDB's names,
+/// or Postgres's `format_type`).
+fn bind_cols(
+    types: &[(String, String)],
+) -> std::result::Result<Vec<atlatl_conn_clickhouse::bind::Col>, String> {
+    use atlatl_conn_clickhouse::bind::{Col, Num};
+    types
+        .iter()
+        .map(|(name, ty)| {
+            let t = ty.trim().to_ascii_uppercase();
+            let num = if let Some(args) = ["DECIMAL(", "NUMERIC("]
+                .iter()
+                .find_map(|p| t.strip_prefix(p))
+                .and_then(|r| r.strip_suffix(')'))
+            {
+                let ps: Vec<i64> = args
+                    .split(',')
+                    .map(|a| a.trim().parse::<i64>())
+                    .collect::<std::result::Result<_, _>>()
+                    .map_err(|_| format!("column `{name}` is {ty}, which atlatl can't read"))?;
+                match ps[..] {
+                    [p, s] if (1..=76).contains(&p) && (0..=p).contains(&s) => {
+                        Num::Decimal(p as u32, s as u32)
+                    }
+                    [p] if (1..=76).contains(&p) => Num::Decimal(p as u32, 0),
+                    _ => {
+                        return Err(format!(
+                            "column `{name}` is {ty}, which no ClickHouse `Decimal` holds (up to 76 digits, a scale from 0 to the precision); cast it in the bind query (`CAST({name} AS DECIMAL(38, 4))`, or `CAST({name} AS DOUBLE)`)"
+                        ));
+                    }
+                }
+            } else {
+                match t.as_str() {
+                    "DECIMAL" | "NUMERIC" => {
+                        return Err(format!(
+                            "column `{name}` is {ty} without a precision and scale, so its values have no exact ClickHouse type; cast it in the bind query (`{name}::numeric(18,4)`, or `{name}::float8`)"
+                        ));
+                    }
+                    "DOUBLE" | "FLOAT" | "REAL" | "DOUBLE PRECISION" | "FLOAT4" | "FLOAT8" => {
+                        Num::Float
+                    }
+                    _ => Num::Other,
+                }
+            };
+            Ok(Col {
+                name: name.clone(),
+                ty: ty.clone(),
+                num,
+            })
+        })
+        .collect()
+}
+
+/// Refuses a fraction in a column that's neither decimal nor float: there's no type to write it
+/// as that ClickHouse wouldn't truncate to the compared column's.
+fn bind_fractions(
+    cols: &[atlatl_conn_clickhouse::bind::Col],
+    rows: &[Vec<Lit>],
+) -> std::result::Result<(), String> {
+    use atlatl_conn_clickhouse::bind::Num;
+    for r in rows {
+        for (v, c) in r.iter().zip(cols) {
+            if let Lit::Number(n) = v
+                && c.num == Num::Other
+                && n.contains(['.', 'e', 'E'])
+            {
+                return Err(format!(
+                    "column `{}` is {}, and its value {n} has no exact ClickHouse type; cast it in the bind query (`CAST({} AS DECIMAL(18, 4))`, or `CAST({} AS DOUBLE)`)",
+                    c.name, c.ty, c.name, c.name
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A JSON object's keys in order, repeats included.
@@ -1522,9 +1888,30 @@ fn clickhouse_options(
     rep: &ReplicationPlan,
     conn: &ConnConfig,
 ) -> atlatl_conn_clickhouse::Options {
+    let mut o = clickhouse_base_options(&rt.project, rep, conn);
+    if let Some(n) = conn.common.max_concurrency {
+        let mut slots = rt
+            .clickhouse_slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        o.slots = Some(
+            slots
+                .entry(conn.name.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new((n as usize).max(1))))
+                .clone(),
+        );
+    }
+    o
+}
+
+/// `clickhouse_options` without the run's shared slots.
+pub(crate) fn clickhouse_base_options(
+    project: &atlatl_core::config::load::Project,
+    rep: &ReplicationPlan,
+    conn: &ConnConfig,
+) -> atlatl_conn_clickhouse::Options {
     let mut o = atlatl_conn_clickhouse::Options::default();
-    if let Some(p) = rt
-        .project
+    if let Some(p) = project
         .replication(rep.config_name())
         .and_then(|r| RetryPolicy::from_config(&r.retry).ok())
     {
@@ -1537,18 +1924,6 @@ fn clickhouse_options(
         if let Some(c) = t.connect {
             o.connect_timeout = c.0;
         }
-    }
-    if let Some(n) = conn.common.max_concurrency {
-        let mut slots = rt
-            .clickhouse_slots
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        o.slots = Some(
-            slots
-                .entry(conn.name.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new((n as usize).max(1))))
-                .clone(),
-        );
     }
     o
 }
@@ -1893,6 +2268,7 @@ async fn run_unit_inner(
         Src::Redshift(r) => Some(r.as_ref()),
         _ => None,
     };
+    let mut resolved = check_source_types(rt, &mut session, unit, &src, &cancel).await?;
 
     let mut works = Vec::new();
     for (ri, rep) in unit.iter().enumerate() {
@@ -1930,19 +2306,26 @@ async fn run_unit_inner(
                 Src::Postgres(p) => Some(p.as_ref()),
                 _ => None,
             };
-            let ms = members(
-                rt,
-                &mut session,
-                &src_alias,
-                rs,
-                pg,
-                &cancel,
-                s,
-                sp,
-                rep.instance.as_ref(),
-            )
-            .await?;
-            for (mi, m) in ms.iter().enumerate() {
+            let ms = match resolved.remove(&(ri, si)) {
+                Some(ms) => ms,
+                None => members(
+                    rt,
+                    &mut session,
+                    &src_alias,
+                    rs,
+                    pg,
+                    &cancel,
+                    s,
+                    sp,
+                    rep.instance.as_ref(),
+                )
+                .await?
+                .into_iter()
+                .map(|m| (m, None))
+                .collect(),
+            };
+            for (mi, (m, admitted)) in ms.into_iter().enumerate() {
+                let m = &m;
                 let t0 = std::time::Instant::now();
                 let w = prepare(
                     rt,
@@ -1957,6 +2340,7 @@ async fn run_unit_inner(
                     attempt,
                     &cancel,
                     unloads,
+                    admitted,
                 )
                 .await?;
                 rt.report.member(&rep.name, &sp.id, &m.name, |r| {
@@ -2301,6 +2685,47 @@ mod tests {
         );
         let e = bind_rows(&[r#"{"ids": [1, 2]}"#.into()]).expect_err("list");
         assert!(e.contains("must be a scalar"), "{e}");
+    }
+
+    #[test]
+    fn bind_numbers_are_typed_by_their_source_column() {
+        use atlatl_conn_clickhouse::bind::Num;
+        let t = |ty: &str| bind_cols(&[("amt".into(), ty.into())]).map(|c| c[0].num);
+        assert_eq!(t("DECIMAL(4,3)"), Ok(Num::Decimal(4, 3)));
+        assert_eq!(t("numeric(5,2)"), Ok(Num::Decimal(5, 2)));
+        assert_eq!(t("numeric(7)"), Ok(Num::Decimal(7, 0)));
+        assert_eq!(t("DOUBLE"), Ok(Num::Float));
+        assert_eq!(t("FLOAT"), Ok(Num::Float));
+        assert_eq!(t("double precision"), Ok(Num::Float));
+        assert_eq!(t("real"), Ok(Num::Float));
+        for ty in ["HUGEINT", "UBIGINT", "VARCHAR", "bigint"] {
+            assert_eq!(t(ty), Ok(Num::Other), "{ty}");
+        }
+        assert_eq!(
+            t("numeric").expect_err("unconstrained"),
+            "column `amt` is numeric without a precision and scale, so its values have no exact ClickHouse type; cast it in the bind query (`amt::numeric(18,4)`, or `amt::float8`)"
+        );
+        for ty in ["numeric(100,2)", "numeric(5,-2)", "numeric(2,4)"] {
+            assert!(
+                t(ty)
+                    .expect_err(ty)
+                    .contains("which no ClickHouse `Decimal` holds"),
+                "{ty}"
+            );
+        }
+        let cols = bind_cols(&[("id".into(), "HUGEINT".into()), ("x".into(), "JSON".into())])
+            .expect("cols");
+        let n = |v: &str| Lit::Number(v.into());
+        bind_fractions(
+            &cols,
+            &[vec![n("170141183460469231731687303715884105727"), n("3")]],
+        )
+        .expect("integers");
+        let e = bind_fractions(&cols, &[vec![n("1"), n("1.5")]]).expect_err("fraction");
+        assert!(
+            e.starts_with("column `x` is JSON, and its value 1.5 has no exact ClickHouse type"),
+            "{e}"
+        );
     }
 
     #[test]

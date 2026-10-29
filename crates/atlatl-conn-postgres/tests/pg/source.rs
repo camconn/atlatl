@@ -108,21 +108,38 @@ async fn types_read_exactly(pg: &'static Postgres) {
         .columns("public", "t", None, &["skip_me".into()])
         .await
         .expect("columns");
-    let reads: Vec<(&str, Read)> = cols.iter().map(|c| (c.name.as_str(), c.read)).collect();
+    let reads: Vec<(&str, &str)> = cols
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_str(),
+                match c.read {
+                    Read::Native => "native",
+                    Read::Decimal => "decimal",
+                    Read::Refused(_) => "refused",
+                    _ => "other",
+                },
+            )
+        })
+        .collect();
     assert_eq!(
         reads,
         [
-            ("id", Read::Native),
-            ("m", Read::Enum),
-            ("tags", Read::ServerJson),
-            ("doc", Read::Native),
-            ("n", Read::Native),
-            ("nu", Read::ServerText),
-            ("nbig", Read::ServerText),
-            ("ts", Read::Native),
-            ("Mixed", Read::Native),
+            ("id", "native"),
+            ("m", "refused"),
+            ("tags", "refused"),
+            ("doc", "native"),
+            ("n", "decimal"),
+            ("nu", "refused"),
+            ("nbig", "refused"),
+            ("ts", "native"),
+            ("Mixed", "native"),
         ]
     );
+    let cols = source::admit(cols, &|n| {
+        matches!(n, "m" | "tags" | "nu" | "nbig").then(|| "VARCHAR".to_owned())
+    })
+    .expect("declared");
     let only = s
         .columns("public", "t", Some(&["ID".into(), "ts".into()]), &[])
         .await
@@ -177,21 +194,22 @@ async fn types_read_exactly(pg: &'static Postgres) {
     assert_eq!(empty, ("[]".into(), None));
 
     let pcols = s
-        .columns("public", "plain", None, &[])
+        .columns("public", "plain", None, &["m".into()])
         .await
         .expect("plain");
     let prel = source::relation("src", "public", "plain", &pcols).expect("rel");
-    assert!(!prel.contains("postgres_query"), "scans natively: {prel}");
-    let (ty, m): (String, String) = c
+    assert!(
+        prel.starts_with(r#"(SELECT atlatl_t."id", atlatl_t."ts" FROM "src"."public"."plain" AS atlatl_t CROSS JOIN"#),
+        "scans natively, behind the timestamp guard: {prel}"
+    );
+    let id: i32 = c
         .query_row(
-            &format!(
-                "SELECT typeof(m), m FROM {prel} WHERE ts >= TIMESTAMPTZ '2024-01-01 00:00:00+00'"
-            ),
+            &format!("SELECT id FROM {prel} WHERE ts >= TIMESTAMPTZ '2024-01-01 00:00:00+00'"),
             [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .expect("plain read");
-    assert_eq!((ty.as_str(), m.as_str()), ("VARCHAR", "sad"));
+    assert_eq!(id, 1);
     let q: i64 = c
         .query_row(
             &format!(
@@ -419,11 +437,13 @@ async fn cursor_predicates_run_in_postgres(pg: &'static Postgres) {
     .await;
     let s = PgSource::new(o.clone()).expect("source");
     let cols = s.columns("public", "t", None, &[]).await.expect("cols");
+    let cols =
+        source::admit(cols, &|n| (n == "tags").then(|| "VARCHAR".to_owned())).expect("declared");
     let c = engine("src", &o);
     let count = |cur: &source::Cursor| -> (i64, bool) {
         let pred = source::cursor_predicate(cur, &cols);
         let (rel, pushed) =
-            source::relation_where("src", "public", "t", &cols, pred.as_deref()).expect("rel");
+            source::relation_where("src", "public", "t", &cols, pred.as_deref(), &[]).expect("rel");
         let n = c
             .query_row(&format!("SELECT count(*) FROM {rel}"), [], |r| r.get(0))
             .expect("count");

@@ -36,6 +36,19 @@ const REPS: &str = r#"replications:
     retry: {max_attempts: 2, base: 10ms, max: 50ms}
     streams:
       - {id: warehouse/chunked, mode: full-refresh, from: {table: est_v2.est_core_cons_af}, object: br.cons_chunked, primary_key: [id], chunk: {by: files, size: 1B}}
+  super:
+    source: warehouse
+    target: lake
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    streams:
+      - {id: warehouse/sup_json, mode: full-refresh, from: {table: est_v2.est_core_sup}, object: br.sup_json, primary_key: [id], columns: {payload: {type: JSON}}}
+      - {id: warehouse/sup_text, mode: full-refresh, from: {table: est_v2.est_core_sup}, object: br.sup_text, primary_key: [id], columns: {"*": {type: VARCHAR}}}
+  super_undeclared:
+    source: warehouse
+    target: lake
+    retry: {max_attempts: 2, base: 10ms, max: 50ms}
+    streams:
+      - {id: warehouse/sup_raw, mode: full-refresh, from: {table: est_v2.est_core_sup}, object: br.sup_raw, primary_key: [id]}
 "#;
 
 const TABLES: &str = r#"
@@ -361,4 +374,104 @@ async fn kill_mid_unload_cancels_the_statement() {
         "SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 'cons_af'",
     );
     assert_eq!(exists, 0, "the lake is unchanged");
+}
+
+/// A `super` column: a DuckDB struct the catalog reports as `super`, so only `JSON_SERIALIZE`
+/// (here a macro emitting JSON) turns it into JSON text; a plain cast would give `{'a': 1, …}`.
+fn seed_super(e: &Env) {
+    e.fake.sql(
+        "CREATE TABLE est_v2.est_core_sup (id BIGINT, payload STRUCT(a INTEGER, tags VARCHAR[]));
+         INSERT INTO est_v2.est_core_sup VALUES (1, {'a': 1, 'tags': ['x', 'it''s']}), (2, NULL);
+         ALTER VIEW svv_columns RENAME TO svv_columns_base;
+         CREATE VIEW svv_columns AS SELECT * REPLACE
+           (CASE WHEN data_type LIKE 'struct%' THEN 'super' ELSE data_type END AS data_type)
+           FROM svv_columns_base;
+         CREATE MACRO json_serialize(x) AS CAST(to_json(x) AS VARCHAR);",
+    );
+}
+
+fn unloads(e: &Env) -> Vec<String> {
+    e.fake
+        .calls("ExecuteStatement")
+        .iter()
+        .filter_map(|c| c.body["Sql"].as_str())
+        .filter(|s| s.starts_with("UNLOAD"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declared_super_unloads_serialized_as_its_declared_type() {
+    let e = setup().await;
+    seed_super(&e);
+    let r = go(&e, &["super"]).await;
+    assert_eq!(rows(&r, "super").inserted, 4);
+    let u = unloads(&e);
+    assert_eq!(u.len(), 2, "{u:?}");
+    for sql in &u {
+        assert!(
+            sql.starts_with(
+                r#"UNLOAD ('SELECT "id", JSON_SERIALIZE("payload") AS "payload" FROM "est_v2"."est_core_sup"')"#
+            ),
+            "{sql}"
+        );
+    }
+    for (t, ty) in [("sup_json", "JSON"), ("sup_text", "VARCHAR")] {
+        assert_eq!(
+            q::<String>(
+                &e,
+                &format!("SELECT typeof(payload) FROM lake.br.{t} LIMIT 1")
+            ),
+            ty
+        );
+        assert_eq!(
+            q::<String>(
+                &e,
+                &format!("SELECT payload::VARCHAR FROM lake.br.{t} WHERE id = 1")
+            ),
+            r#"{"a":1,"tags":["x","it's"]}"#
+        );
+        assert!(q::<bool>(
+            &e,
+            &format!("SELECT payload IS NULL FROM lake.br.{t} WHERE id = 2")
+        ));
+    }
+    assert_eq!(
+        q::<i64>(
+            &e,
+            "SELECT (payload->>'$.a')::INT FROM lake.br.sup_json WHERE id = 1"
+        ),
+        1
+    );
+    assert_eq!(
+        q::<String>(&e, "SELECT typeof(id) FROM lake.br.sup_text LIMIT 1"),
+        "VARCHAR",
+        "`*` declares every column"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undeclared_super_is_refused_before_reading() {
+    let e = setup().await;
+    seed_super(&e);
+    let r = run_reps(&e, &["super_undeclared"], CancellationToken::new()).await;
+    let x = &r.replications[0];
+    assert_eq!(x.status, ReplicationStatus::Failed);
+    let err = x.error.as_ref().expect("error");
+    assert_eq!(
+        (err.class.to_string().as_str(), err.code.as_deref()),
+        ("config", Some("source_type")),
+        "{}",
+        err.message
+    );
+    assert_eq!(
+        err.message,
+        "`est_v2.est_core_sup`: column `payload` is super, which the target can't hold: there's no semi-structured type, and its text depends on the read path; declare `columns.payload.type` (JSON or VARCHAR) to read it as `JSON_SERIALIZE(\"payload\")`, or exclude it with `columns.exclude`"
+    );
+    assert!(unloads(&e).is_empty(), "nothing is unloaded");
+    let exists: i64 = q(
+        &e,
+        "SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 'sup_raw'",
+    );
+    assert_eq!(exists, 0);
 }

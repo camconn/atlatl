@@ -510,6 +510,18 @@ fn static_checks() {
             "needs `primary_key`",
         ),
         (
+            "replications:\n  x: {source: lake, target: app_pg, streams: [{id: x/a, mode: cdc, from: {table: g.t}, object: o, primary_key: [id], on_cast_error: {set_null: true}}]}\n",
+            "`on_cast_error` applies to ingest only (stream `x/a` is cdc); change capture refuses values that don't fit exactly",
+        ),
+        (
+            "replications:\n  x: {source: lake, target: app_pg, defaults: {on_cast_error: {retry: row}}, streams: [{id: x/a, mode: cdc, from: {table: g.t}, object: o, primary_key: [id]}]}\n",
+            "`on_cast_error` applies to ingest only (stream `x/a` is cdc)",
+        ),
+        (
+            "replications:\n  x: {source: lake, target: app_pg, streams: [{id: x/a, mode: cdc, from: {table: g.t}, object: o, primary_key: [id], on_decode_error: {retry: none}}]}\n",
+            "`on_decode_error` applies to ingest only (stream `x/a` is cdc)",
+        ),
+        (
             "replications:\n  x: {source: lake, target: app_pg, streams: [{id: x/a, mode: full-refresh, from: {table: g.t}, object: o}]}\n",
             "writes into the lake",
         ),
@@ -702,6 +714,125 @@ fn delta_source_checks() {
 }
 
 #[test]
+fn cdc_refuses_ingest_only_keys() {
+    let project = PROJECT.replace(
+        "    read_only: true\n  record_queue:",
+        "    read_only: true\n    changes: {production: true, slots: {allow_create: true}}\n  record_queue:",
+    );
+    let keys = [
+        ("on_cast_error", "{set_null: true}"),
+        ("on_decode_error", "{retry: row}"),
+        ("chunk", "{by: range, column: id, step: '100'}"),
+        ("infer", "safe"),
+        ("null_keys", "skip"),
+        ("duplicates", "fail"),
+        ("order_by", "[ts]"),
+        ("flatten", "1"),
+        ("naming", "snake"),
+        ("table_drift", "{new_columns: fail}"),
+    ];
+    let kinds = [
+        "{source: lake, target: app_pg, %D streams: [{id: x/a, mode: cdc, from: {table: g.t}, object: o, primary_key: [id] %S}]}",
+        "{source: appdb_pg, target: lake, %D streams: [{id: x/a, mode: cdc, from: {table: public.users}, object: o, primary_key: [id] %S}]}",
+    ];
+    for kind in kinds {
+        for (k, v) in keys {
+            for (d, s) in [
+                (String::new(), format!(", {k}: {v}")),
+                (format!("defaults: {{{k}: {v}}},"), String::new()),
+            ] {
+                let yaml = format!(
+                    "replications:\n  x: {}\n",
+                    kind.replace("%D", &d).replace("%S", &s)
+                );
+                let errs = Fixture::new(&[
+                    ("atlatl.yaml", project.as_str()),
+                    ("replications/extra.yaml", &yaml),
+                ])
+                .errors(&static_all());
+                let expect = format!("`{k}` applies to ingest only (stream `x/a` is cdc)");
+                assert!(
+                    errs.iter()
+                        .any(|e| e.starts_with("[mode-key]") && e.contains(&expect)),
+                    "{expect}\n{yaml}\n{errs:?}"
+                );
+            }
+        }
+        let inherited = keys
+            .iter()
+            .map(|(k, v)| format!("  {k}: {v}\n"))
+            .collect::<String>();
+        let project = project.replace("defaults:\n", &format!("defaults:\n{inherited}"));
+        let yaml = format!(
+            "replications:\n  x: {}\n",
+            kind.replace("%D", "").replace("%S", "")
+        );
+        let errs = Fixture::new(&[
+            ("atlatl.yaml", project.as_str()),
+            ("replications/extra.yaml", &yaml),
+        ])
+        .errors(&static_all());
+        assert!(
+            !errs.iter().any(|e| e.contains("x/a")),
+            "project defaults don't reach a cdc stream\n{yaml}\n{errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("`flatten` is not implemented yet")),
+            "but still reach ingest streams: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn chunk_needs_no_staged_set() {
+    let chunk = "chunk: {by: range, column: id, step: 10}";
+    let errs = |extra: &str| {
+        with_rep(&format!(
+            "replications:\n  x: {{source: lake, target: lake, streams: [{{id: x/a, mode: full-refresh, from: {{table: g.t}}, object: o, {chunk}, {extra}}}]}}\n"
+        ))
+        .plan(&static_all())
+        .map_or_else(
+            |d| d.errors().map(|e| format!("[{}] {}", e.code, e.error)).collect::<Vec<_>>(),
+            |_| Vec::new(),
+        )
+    };
+    let staged = |e: &[String], what: &str| {
+        e.iter()
+            .any(|e| e.starts_with("[chunk]") && e.contains(what) && e.contains("(stream `x/a`)"))
+    };
+    let e = errs("on_cast_error: {set_null: true}, columns: {amt: {type: 'DECIMAL(10,2)'}}");
+    assert!(
+        staged(&e, "`on_cast_error.set_null` with declared column types"),
+        "{e:?}"
+    );
+    let e = errs("on_cast_error: {set_null: true}");
+    assert!(!staged(&e, "set_null"), "{e:?}");
+    let e = errs("on_cast_error: {set_null: false}, columns: {amt: {type: INTEGER}}");
+    assert!(!staged(&e, "set_null"), "{e:?}");
+    let e = errs("duplicates: last, order_by: [ts], primary_key: [id]");
+    assert!(
+        staged(&e, "`duplicates: first|last` needs a staged set"),
+        "{e:?}"
+    );
+    let e = errs("duplicates: last, order_by: [ts]");
+    assert!(!staged(&e, "duplicates"), "{e:?}");
+}
+
+#[test]
+fn flatten_is_not_implemented() {
+    let errs = with_rep(
+        "replications:\n  x: {source: lake, target: lake, streams: [{id: x/a, mode: full-refresh, from: {table: g.t}, object: o, flatten: 2}]}\n",
+    )
+    .errors(&static_all());
+    assert!(
+        errs.iter().any(|e| e.starts_with("[not-implemented]")
+            && e.contains("`flatten` is not implemented yet (stream `x/a`)")),
+        "{errs:?}"
+    );
+}
+
+#[test]
 fn pg_changes_checks() {
     let rep = |streams: &str| {
         format!(
@@ -729,7 +860,10 @@ fn pg_changes_checks() {
     let hist = rep(
         "{id: appdb/users, mode: cdc, from: {table: public.users}, object: o, history: true, deletes: {mode: soft}}",
     );
-    for y in [&ok, &hist] {
+    let narrowed = rep(
+        "{id: appdb/users, mode: cdc, from: {table: public.users}, object: o, primary_key: [id], columns: {exclude: [ssn], email: {type: VARCHAR}}}",
+    );
+    for y in [&ok, &hist, &narrowed] {
         if let Err(d) = with(y).plan(&static_all()) {
             let errs: Vec<String> = d.errors().map(|e| e.error.to_string()).collect();
             panic!("{y}: {errs:?}");
@@ -748,6 +882,34 @@ fn pg_changes_checks() {
         (
             "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, deletes: {mode: soft, column: gone}}",
             "`deletes.column`/`value` are not supported",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, columns: {email: {transform: \"lower(email)\"}}}",
+            "`columns.email.transform` does not apply to postgres `changes` streams",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, columns: {email: {target_type: text}}}",
+            "`columns.email.target_type` does not apply",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, columns: {mail: {source_name: email}}}",
+            "`columns.mail.source_name` does not apply",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, primary_key: [ID], columns: {exclude: [id]}}",
+            "primary key column `ID` is left out by `columns.include`/`exclude`",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, primary_key: [id], columns: {include: [email]}}",
+            "primary key column `id` is left out",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, on_cast_error: {set_null: true}}",
+            "`on_cast_error` applies to ingest only (stream `appdb/u` is cdc); change capture refuses values that don't fit exactly",
+        ),
+        (
+            "{id: appdb/u, mode: cdc, from: {table: public.users}, object: o, on_decode_error: {retry: row}}",
+            "`on_decode_error` applies to ingest only (stream `appdb/u` is cdc)",
         ),
     ] {
         let errs = with(&rep(streams)).errors(&static_all());

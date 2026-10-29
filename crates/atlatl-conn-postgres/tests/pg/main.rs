@@ -27,6 +27,7 @@ mod locks;
 mod pool;
 mod source;
 mod tls;
+mod types;
 
 pub fn opts(pg: &Postgres, db: &str) -> ConnectOptions {
     ConnectOptions::new(&pg.host, pg.port, db, &pg.user, Some(pg.password.clone()))

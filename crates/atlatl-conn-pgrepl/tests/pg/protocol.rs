@@ -2,7 +2,7 @@ use atlatl_conn_postgres::connect;
 use atlatl_core::ErrorClass;
 use atlatl_core::config::model::PgProtocol;
 
-use crate::apply::{T_INSERT, T_ROWS, T_WANT, TYPES_DDL};
+use crate::apply::{T_INSERT, T_ROWS, T_WANT, TYPES_DDL, t_stream};
 use crate::{Env, protocol, stream, versions};
 
 async fn negotiates_by_server_version(v: u32) {
@@ -21,7 +21,7 @@ versions!(negotiates_by_server_version);
 
 async fn typed_values(env: &Env, p: PgProtocol) -> (u32, bool) {
     env.exec(TYPES_DDL).await;
-    let spec = env.spec(vec![stream("t")]);
+    let spec = env.spec(vec![t_stream()]);
     env.try_run(spec.clone(), protocol(p))
         .await
         .expect("backfill");
@@ -62,7 +62,11 @@ async fn binary_falls_back_to_text_for_unknown_types() {
         "CREATE TABLE f (id int PRIMARY KEY, addr inet); INSERT INTO f VALUES (1, '10.0.0.1');",
     )
     .await;
-    let spec = env.spec(vec![stream("f")]);
+    let f = atlatl_conn_pgrepl::StreamSpec {
+        columns: crate::columns(serde_json::json!({"addr": {"type": "VARCHAR"}})),
+        ..stream("f")
+    };
+    let spec = env.spec(vec![f]);
     env.run(spec.clone()).await;
     env.exec("INSERT INTO f VALUES (2, '192.168.0.0/16')").await;
     let r = env.run(spec).await;
@@ -72,7 +76,7 @@ async fn binary_falls_back_to_text_for_unknown_types() {
     );
     assert_eq!(
         env.rows("SELECT id::VARCHAR || ' ' || addr FROM lake.br.f ORDER BY id"),
-        ["1 10.0.0.1", "2 192.168.0.0/16"]
+        ["1 10.0.0.1/32", "2 192.168.0.0/16"]
     );
 }
 
@@ -233,7 +237,11 @@ async fn restarts_as_text_for_a_passing_type(v: u32) {
     let env = Env::new(v).await;
     env.exec("CREATE TABLE x (id int PRIMARY KEY, v text)")
         .await;
-    let spec = env.spec(vec![stream("x")]);
+    let x = atlatl_conn_pgrepl::StreamSpec {
+        columns: crate::columns(serde_json::json!({"addr": {"type": "VARCHAR"}})),
+        ..stream("x")
+    };
+    let spec = env.spec(vec![x]);
     env.run(spec.clone()).await;
     env.each(&[
         "ALTER TABLE x ADD COLUMN addr inet",
@@ -250,7 +258,7 @@ async fn restarts_as_text_for_a_passing_type(v: u32) {
     assert_eq!(r.applied.streams[0].counts.inserted, 2);
     assert_eq!(
         env.rows("SELECT id::VARCHAR || v || coalesce(addr, '∅') FROM lake.br.x ORDER BY id"),
-        ["1a10.0.0.1", "2b∅"]
+        ["1a10.0.0.1/32", "2b∅"]
     );
     env.exec("INSERT INTO x VALUES (3, 'c')").await;
     let r = env.run(spec).await;

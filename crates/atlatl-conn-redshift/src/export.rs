@@ -377,6 +377,7 @@ mod tests {
             precision: None,
             scale: None,
             duck_type: duck_type(t, None, None).expect("type"),
+            refused: None,
         }
     }
 
@@ -434,6 +435,7 @@ mod tests {
                 precision: Some(18),
                 scale: Some(4),
                 duck_type: "DECIMAL(18,4)".into(),
+                refused: None,
                 ..col("n", "numeric")
             },
             col("b", "boolean"),

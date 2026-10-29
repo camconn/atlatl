@@ -241,6 +241,17 @@ pub fn canon(s: &str) -> Option<String> {
     Some(out)
 }
 
+/// The value of the JSON string token `token`, quotes included.
+pub(crate) fn unescape(token: &str) -> Option<String> {
+    let mut p = P {
+        s: token,
+        i: 0,
+        depth: 0,
+    };
+    let s = p.string()?;
+    (p.i == token.len()).then_some(s)
+}
+
 pub struct JsonCanon;
 
 impl VScalar for JsonCanon {

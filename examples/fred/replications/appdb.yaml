@@ -13,6 +13,10 @@ replications:
       - id: appdb/series
         from: {table: fred.series}
         primary_key: [series_id]
+        # Enums have no lake type: land their labels.
+        columns:
+          frequency: {type: VARCHAR}
+          adjustment: {type: VARCHAR}
       - id: appdb/observations
         from: {tables: "fred.obs_*"}
         primary_key: [series_id, observation_date]

@@ -10,6 +10,7 @@ use crate::config::graph::find_cycle;
 use crate::config::load::{Project, Replication, Stream, normalize_rel};
 use crate::config::model::{
     ChunkBy, ConnectionKind, Duplicates, ForEachOver, Mode, SchemaMode, SourceSnapshot,
+    StreamConfig,
 };
 use crate::config::node::{Node, Span};
 use crate::template::{Phase, Templates};
@@ -784,6 +785,30 @@ fn check_stream(
             );
         }
     }
+    if m == Mode::Cdc {
+        for k in StreamConfig::INGEST_ONLY {
+            if s.node.get(k).is_some_and(|v| !v.is_null()) {
+                let why = if k == "on_cast_error" {
+                    "; change capture refuses values that don't fit exactly"
+                } else {
+                    ""
+                };
+                err(
+                    diags,
+                    "mode-key",
+                    format!("`{k}` applies to ingest only (stream `{id}` is cdc){why}"),
+                    &mode.span,
+                );
+            }
+        }
+    } else if c.flatten.is_some() {
+        err(
+            diags,
+            "not-implemented",
+            format!("`flatten` is not implemented yet (stream `{id}`)"),
+            &mode.span,
+        );
+    }
     if c.guard.is_some() && m != Mode::FullRefresh {
         err(
             diags,
@@ -830,6 +855,32 @@ fn check_stream(
         };
         if let Some(msg) = bad {
             err(diags, "chunk", format!("{msg} (stream `{id}`)"), &s.id.span);
+        }
+        let declared = c
+            .columns
+            .as_ref()
+            .is_some_and(|cols| cols.columns.values().any(|col| col.kind.is_some()));
+        if c.set_null() && declared {
+            err(
+                diags,
+                "chunk",
+                format!(
+                    "`on_cast_error.set_null` with declared column types needs a staged set; it can't be combined with `chunk` (stream `{id}`)"
+                ),
+                &s.id.span,
+            );
+        }
+        if matches!(c.duplicates, Some(Duplicates::First | Duplicates::Last))
+            && c.primary_key.as_ref().is_some_and(|k| !k.is_empty())
+        {
+            err(
+                diags,
+                "chunk",
+                format!(
+                    "`duplicates: first|last` needs a staged set; it can't be combined with `chunk` (stream `{id}`)"
+                ),
+                &s.id.span,
+            );
         }
     }
     if let Some(rc) = &c.retry
@@ -957,6 +1008,38 @@ fn check_pg_changes(p: &Project, r: &Replication, s: &Stream, at: &Span, diags: 
                 format!("`{k}` does not apply to postgres `changes` streams (stream `{id}`)"),
                 at,
             );
+        }
+    }
+    if let Some(cols) = &c.columns {
+        for (name, cc) in &cols.columns {
+            for (k, set) in [
+                ("transform", cc.transform.is_some()),
+                ("target_type", cc.target_type.is_some()),
+                ("source_name", cc.source_name.is_some()),
+            ] {
+                if set {
+                    err(
+                        diags,
+                        "mode-key",
+                        format!(
+                            "`columns.{name}.{k}` does not apply to postgres `changes` streams (stream `{id}`)"
+                        ),
+                        at,
+                    );
+                }
+            }
+        }
+        for k in c.primary_key.iter().flat_map(|p| &p.value) {
+            if !cols.keeps(k) {
+                err(
+                    diags,
+                    "columns",
+                    format!(
+                        "stream `{id}`: primary key column `{k}` is left out by `columns.include`/`exclude`; a changes stream lands its key"
+                    ),
+                    at,
+                );
+            }
         }
     }
     if let Some(d) = &c.deletes

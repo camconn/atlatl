@@ -9,6 +9,7 @@ pub mod locks;
 pub mod pool;
 pub mod source;
 pub mod tls;
+pub mod types;
 
 pub use apply::{
     ApplyCounts, ApplyOptions, ApplyTxn, DELETE_TS, Deletes, PgApplier, StreamTarget, check_target,

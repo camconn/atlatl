@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::lsn::Lsn;
 use crate::source::{ReplicationSpec, StreamSpec, WindowSummary};
 use crate::stage::Stage;
-use crate::types::lake_type;
+use crate::types::land_type;
 
 pub const OP_COLUMN: &str = "_atlatl_op";
 pub const SYNCED_AT_COLUMN: &str = "_atlatl_synced_at";
@@ -514,10 +514,7 @@ fn target_columns(duck: &Connection, alias: &str, s: &StreamSpec, st: &Stage) ->
     let mut types = HashMap::new();
     let mut missing = Vec::new();
     for c in &st.cols {
-        let t = have
-            .get(&c.name)
-            .cloned()
-            .unwrap_or_else(|| lake_type(c.oid, c.typmod));
+        let t = have.get(&c.name).cloned().unwrap_or_else(|| land_type(c));
         if !have.contains_key(&c.name) {
             missing.push((c.name.clone(), t.clone()));
         }

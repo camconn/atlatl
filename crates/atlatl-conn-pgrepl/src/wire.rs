@@ -163,6 +163,7 @@ impl ReplConn {
                 ("IntervalStyle", "postgres"),
                 ("extra_float_digits", "3"),
                 ("bytea_output", "hex"),
+                ("lc_monetary", "C"),
             ],
             &mut c.out,
         )

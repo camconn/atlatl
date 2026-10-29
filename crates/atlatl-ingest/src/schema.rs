@@ -3,7 +3,7 @@
 //! Evaluation is SQL over the staging relation: one key pass (JSON staging) or `DESCRIBE`
 //! (columnar staging), one aggregate pass, and a `LIMIT 3` sample query per violated field.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use atlatl_core::config::model::{
     FieldSpec, LogicalType, Policy, SchemaMode as ConfigMode, SourceSchema, Threshold,
@@ -12,7 +12,9 @@ use atlatl_core::error::{AtlatlError, Result};
 use atlatl_core::obs::report::{
     SchemaMode, SchemaReport, SchemaStatus, SchemaViolation, Severity, ViolationKind,
 };
+use atlatl_engine::decimal_text::{parts as decimal_parts, plain as decimal_text};
 use duckdb::Connection;
+use duckdb::vscalar::VScalar;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
@@ -100,6 +102,7 @@ pub fn evaluate(c: &Connection, staged: &Staged<'_>, schema: &SourceSchema) -> R
         .map(|(name, spec)| FieldSql::new(name, spec))
         .collect::<Result<Vec<_>>>()?;
     check_formats(c, &fields)?;
+    ensure_exact(c)?;
     let (seen, sources) = field_sources(c, staged)?;
     let declared: BTreeSet<&str> = schema.fields.keys().map(String::as_str).collect();
     let rel = staged.relation();
@@ -373,13 +376,17 @@ fn projection(staged: &Staged<'_>, present: &[(&FieldSql, String)]) -> String {
     match staged {
         Staged::Json { column, .. } => {
             let mut inner = vec!["__ord".to_owned()];
+            // TODO(perf): each field rescans the whole record text, O(fields × record size) per
+            // row; one pass returning every field's exact text would fix it.
             for (i, (f, _)) in present.iter().enumerate() {
                 inner.push(format!(
-                    "json_extract(__r, {}) AS j{i}",
-                    literal(&json_pointer(&f.name))
+                    "json_extract(__r, {}) AS j{i}, {EXACT}(CAST(__r AS VARCHAR), {}) AS x{i}",
+                    literal(&json_pointer(&f.name)),
+                    literal(&f.name)
                 ));
                 cols.push(format!(
-                    "j{i}, json_type(j{i}) AS jt{i}, json_extract_string(j{i}, '$') AS tx{i}"
+                    "j{i}, json_type(j{i}) AS jt{i}, {} AS tx{i}",
+                    json_text(&format!("j{i}"), &format!("x{i}"))
                 ));
             }
             format!(
@@ -395,7 +402,8 @@ fn projection(staged: &Staged<'_>, present: &[(&FieldSql, String)]) -> String {
                 let cat = category(kind);
                 if cat == "JSON" {
                     cols.push(format!(
-                        "{col} AS j{i}, json_type({col}) AS jt{i}, json_extract_string({col}, '$') AS tx{i}"
+                        "{col} AS j{i}, json_type({col}) AS jt{i}, {} AS tx{i}",
+                        json_text(&col, &format!("{EXACT}(CAST({col} AS VARCHAR))"))
                     ));
                 } else {
                     cols.push(format!(
@@ -409,6 +417,43 @@ fn projection(staged: &Staged<'_>, present: &[(&FieldSql, String)]) -> String {
                 cols[1..].join(", ")
             )
         }
+    }
+}
+
+const EXACT: &str = atlatl_engine::json_exact::FUNCTION;
+const DECIMAL_TEXT: &str = atlatl_engine::decimal_text::FUNCTION;
+
+/// `json_extract_string` of JSON `j`, but with the number literals of `exact` (its text by
+/// [`EXACT`]): DuckDB's extraction rounds fractional numbers through a double.
+fn json_text(j: &str, exact: &str) -> String {
+    format!(
+        "CASE json_type({j}) WHEN 'VARCHAR' THEN json_extract_string({j}, '$') WHEN 'NULL' THEN NULL \
+         ELSE coalesce({exact}, json_extract_string({j}, '$')) END"
+    )
+}
+
+/// Registers [`EXACT`] and [`DECIMAL_TEXT`] on a connection outside the engine, which registers
+/// them itself.
+fn ensure_exact(c: &Connection) -> Result<()> {
+    ensure_udf::<atlatl_engine::json_exact::JsonExact>(c, EXACT)?;
+    ensure_udf::<atlatl_engine::decimal_text::DecimalText>(c, DECIMAL_TEXT)
+}
+
+fn ensure_udf<T: VScalar<State = ()>>(c: &Connection, name: &str) -> Result<()> {
+    let has = |c: &Connection| -> Result<bool> {
+        c.query_row(
+            "SELECT count(*) > 0 FROM duckdb_functions() WHERE function_name = ?",
+            [name],
+            |r| r.get(0),
+        )
+        .map_err(db)
+    };
+    if has(c)? {
+        return Ok(());
+    }
+    match c.register_scalar_function::<T>(name) {
+        Err(_) if has(c)? => Ok(()),
+        r => r.map_err(db),
     }
 }
 
@@ -510,6 +555,17 @@ impl<'a> FieldSql<'a> {
                 }
                 if spec.kind == LogicalType::Boolean && bool_literal(v).is_none() {
                     return bad(format!("`values` entry {v} is not a boolean"));
+                }
+                if spec.kind == LogicalType::Decimal {
+                    match decimal_value(v) {
+                        None => return bad(format!("`values` entry {v} is not a decimal number")),
+                        Some((_, d, e)) if decimal_width(&d, e) > 38 => {
+                            return bad(format!(
+                                "`values` entry {v} needs more than 38 digits; DuckDB's DECIMAL holds at most 38"
+                            ));
+                        }
+                        Some(_) => {}
+                    }
                 }
             }
         }
@@ -691,87 +747,65 @@ fn integer_literal(v: &Value) -> Option<i128> {
     }
 }
 
-/// Exact decimal text as `(negative, digits, exp)`, value = ±digits × 10^exp, digits without
-/// leading or trailing zeros (`"0"` for zero).
-fn decimal_parts(s: &str) -> Option<(bool, String, i64)> {
-    let s = s.trim();
-    let (neg, s) = match s.as_bytes().first()? {
-        b'-' => (true, &s[1..]),
-        b'+' => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let (mant, exp) = match s.find(['e', 'E']) {
-        Some(i) => (&s[..i], s[i + 1..].parse::<i64>().ok()?),
-        None => (s, 0),
-    };
-    let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
-    if (int.is_empty() && frac.is_empty())
-        || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
-    {
-        return None;
+fn decimal_value(v: &Value) -> Option<(bool, String, i64)> {
+    match v {
+        Value::Number(n) => decimal_parts(&n.to_string()),
+        Value::String(s) => decimal_parts(s),
+        _ => None,
     }
-    let all = format!("{int}{frac}");
-    let lead = all.trim_start_matches('0');
-    let digits = lead.trim_end_matches('0');
-    if digits.is_empty() {
-        return Some((false, "0".into(), 0));
-    }
-    let exp = exp
-        .checked_sub(i64::try_from(frac.len()).ok()?)?
-        .checked_add(i64::try_from(lead.len() - digits.len()).ok()?)?;
-    Some((neg, digits.to_owned(), exp))
 }
 
-fn decimal_text(neg: bool, digits: &str, exp: i64) -> String {
-    let sign = if neg { "-" } else { "" };
-    let body = if exp >= 0 {
-        format!("{digits}{}", "0".repeat(exp as usize))
-    } else {
-        let scale = exp.unsigned_abs() as usize;
-        if digits.len() > scale {
-            let (i, f) = digits.split_at(digits.len() - scale);
-            format!("{i}.{f}")
-        } else {
-            format!("0.{}{digits}", "0".repeat(scale - digits.len()))
-        }
-    };
-    format!("{sign}{body}")
+fn decimal_scale(exp: i64) -> i64 {
+    exp.saturating_neg().max(0)
 }
 
-/// Exact membership at the widest allowed scale `s`; the input must also carry no digits past
-/// `s`, checked against a cast at the widest scale the allowed integer digits leave room for.
+fn decimal_int_digits(digits: &str, exp: i64) -> i64 {
+    (digits.len() as i64).saturating_add(exp).max(0)
+}
+
+/// Digits needed to hold the value exactly in a `DECIMAL(p,s)`.
+fn decimal_width(digits: &str, exp: i64) -> i64 {
+    decimal_scale(exp).saturating_add(decimal_int_digits(digits, exp))
+}
+
+/// Exact membership, per group of allowed values sharing a scale `s`: the input must equal one at
+/// `s` and carry no digits past `s`, checked against a cast at the widest scale `s2` the group's
+/// integer digits leave room for. DuckDB rounds digits past `s2`, so the input's own text must
+/// also need at most `s2` places. The input is first spelled plainly by [`DECIMAL_TEXT`]: DuckDB
+/// won't cast an exponent form with integer mantissa digits to a high-scale DECIMAL.
 fn decimal_domain_sql(vals: &[&Value], num: &str) -> String {
-    let parts: Vec<(bool, String, i64)> = vals
+    let mut groups: BTreeMap<i64, Vec<(bool, String, i64)>> = BTreeMap::new();
+    for (n, d, e) in vals.iter().filter_map(|v| decimal_value(v)) {
+        if decimal_width(&d, e) <= 38 {
+            groups.entry(decimal_scale(e)).or_default().push((n, d, e));
+        }
+    }
+    if groups.is_empty() {
+        return "FALSE".into();
+    }
+    let num = format!("{DECIMAL_TEXT}({num})");
+    let places = format!("length(split_part({num}, '.', 2))");
+    let checks = groups
         .iter()
-        .filter_map(|v| match v {
-            Value::Number(n) => decimal_parts(&n.to_string()),
-            Value::String(s) => decimal_parts(s),
-            _ => None,
+        .map(|(s, parts)| {
+            let ip = parts
+                .iter()
+                .map(|(_, d, e)| decimal_int_digits(d, *e))
+                .max()
+                .unwrap_or(0);
+            let s2 = (38 - ip.max(1)).max(*s);
+            let list = parts
+                .iter()
+                .map(|(n, d, e)| format!("'{}'::DECIMAL(38,{s})", decimal_text(*n, d, *e)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "(TRY_CAST({num} AS DECIMAL(38,{s})) IN ({list}) AND {places} <= {s2} \
+                 AND TRY_CAST(TRY_CAST({num} AS DECIMAL(38,{s})) AS DECIMAL(38,{s2})) = TRY_CAST({num} AS DECIMAL(38,{s2})))"
+            )
         })
-        .collect();
-    let scale = |exp: i64| exp.saturating_neg().max(0);
-    let int_digits = |d: &str, exp: i64| (d.len() as i64).saturating_add(exp).max(0);
-    let Some(s) = parts.iter().map(|(_, _, e)| scale(*e)).max() else {
-        return "FALSE".into();
-    };
-    let s = s.min(37);
-    let kept: Vec<_> = parts
-        .iter()
-        .filter(|(_, d, e)| scale(*e) <= s && int_digits(d, *e) <= 38 - s)
-        .collect();
-    let Some(ip) = kept.iter().map(|(_, d, e)| int_digits(d, *e)).max() else {
-        return "FALSE".into();
-    };
-    let s2 = 38 - ip.max(1);
-    let list = kept
-        .iter()
-        .map(|(n, d, e)| format!("'{}'::DECIMAL(38,{s})", decimal_text(*n, d, *e)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "(TRY_CAST({num} AS DECIMAL(38,{s})) IN ({list}) \
-         AND TRY_CAST(TRY_CAST({num} AS DECIMAL(38,{s})) AS DECIMAL(38,{s2})) = TRY_CAST({num} AS DECIMAL(38,{s2})))"
-    )
+        .collect::<Vec<_>>();
+    format!("({})", checks.join(" OR "))
 }
 
 /// Fails early, as a config error, on a strftime format DuckDB rejects.
@@ -860,6 +894,7 @@ const CANDIDATES: &[LogicalType] = &[
 /// narrowest logical type every non-null value fits, and `nullable: false` when no nulls were
 /// seen. Digit strings with leading zeros stay `string`; booleans must be `true`/`false`.
 pub fn infer(c: &Connection, staged: &Staged<'_>) -> Result<Inferred> {
+    ensure_exact(c)?;
     let (seen, sources) = field_sources(c, staged)?;
     let rel = staged.relation();
     let n = count(c, &rel)?;

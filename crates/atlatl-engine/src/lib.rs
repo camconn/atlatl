@@ -3,10 +3,12 @@
 pub mod alloc;
 pub mod batch;
 pub mod budget;
+pub mod decimal_text;
 pub mod engine;
 pub mod error;
 mod ffi;
 pub mod json_canon;
+pub mod json_exact;
 
 pub use batch::{Batch, BatchStream, ByteBudget};
 pub use budget::{Budget, BudgetParams, Detected};

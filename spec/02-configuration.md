@@ -208,22 +208,26 @@ replications:
 | `update_key` | incremental | Watermark column: a string, or `{column, lookback: "2h" \| 0, inclusive: true, nulls: exclude}` ([04 §4.3](04-ingest.md#43-incremental-with-an-update_key-watermark)) |
 | `window` (alias `where`) | incremental | Source filter (SQL, templated), e.g. the warehouse's hourly windows |
 | `bind` | clickhouse `from.query` | Lists spliced into `from.query` as `{{ bind.<name> }}`: `{<name>: {query, fallback, connection, batch, concurrency}}`, listed when the member is extracted ([04 §12](04-ingest.md#12-bind-lists)) |
-| `chunk` | all | `{by: column \| files, size, column}` ([04 §7](04-ingest.md#7-chunking)) |
+| `chunk` | ingest | `{by: column \| files, size, column}` ([04 §7](04-ingest.md#7-chunking)) |
 | `columns` | all | per-column settings (below) |
 | `deletes` | cdc | `{mode: soft \| hard \| ignore, column, value, restore}`; the default is soft ([08 §6.0](08-cdc.md#60-delete-modes)). For postgres → lake the default is `hard`, soft deletes set `_atlatl_op = 'delete'`, and `column`/`value` don't apply |
 | `history` | cdc (postgres → lake) | `true` appends every netted change (`_atlatl_op`, `_atlatl_synced_at`, `_atlatl_lsn`) instead of upserting by key; default `false` ([08 §10.1](08-cdc.md#101-postgres-logical-replication-m6)) |
-| `on_decode_error`, `on_cast_error` | ingest | `{retry: request \| row \| none, reject_threshold, reject_ttl, set_null}`: the retry granularity. `reject_ttl` (a duration, default none) expires old rejects ([03 §7](03-execution.md#7-rejects)). `set_null: true` (`on_cast_error` only) turns a failed cast into NULL with a counted warning. Row mode records rejects ([03 §6.1](03-execution.md#61-decode-failure-granularity)) |
+| `on_decode_error`, `on_cast_error` | ingest | `{retry: request \| row \| none, reject_threshold, reject_ttl, set_null}`: the retry granularity. `reject_ttl` (a duration, default none) expires old rejects ([03 §7](03-execution.md#7-rejects)). `set_null: true` (`on_cast_error` only) turns a failed cast into NULL with a counted warning. Row mode records rejects ([03 §6.1](03-execution.md#61-decode-failure-granularity)). Not on cdc (below): change capture refuses values that don't fit exactly |
 | `on_empty` | full-refresh | `mirror` (default) \| `skip` \| `fail` |
 | `guard` | full-refresh | `{min_rows, max_shrink: 0.5}`, a sibling of `on_empty` ([04 §4.1](04-ingest.md#41-full-refresh)) |
 | `infer` | ingest | `text` (default for REST/files) \| `safe` ([04 §5](04-ingest.md#5-typing)) |
 | `schema` | ingest | Source schema: expected fields and types, enforced every run; `schemas/<stream id>.yaml` (default) or inline ([04 §10](04-ingest.md#10-source-schemas)) |
-| `table_drift` | all | `{new_columns: add \| ignore \| fail, type_changes: fail \| widen, missing_columns: warn \| fail}` |
+| `table_drift` | ingest | `{new_columns: add \| ignore \| fail, type_changes: fail \| widen, missing_columns: warn \| fail}`. TODO: change capture doesn't honour it yet, so it's refused on cdc (below) |
 | `metadata` | ingest | metadata columns, e.g. `{loaded_at: {name: _legacy_loaded_at, type: epoch_s_int}}` ([04 §8](04-ingest.md#8-metadata-columns)) |
 | `hooks` | all | `{pre_apply: [sql…], post_apply: [sql…]}` on the target session, inside the replication's commit, templated with `staging`, `target`. This is an escape hatch; prefer `columns` |
 | `after` | all | Streams in this replication to apply first (FK order) ([08 §7](08-cdc.md#7-ordering)) |
 | `retry` | all | Override request/query-level retry defaults ([03 §6](03-execution.md#6-retry)) |
 | `asset` | all | `{key, group, deps, description, kinds, tags}`, consumed by `dagster-atlatl` (the op is set at replication level) ([09](09-dagster.md)). `key` defaults to the stream id; `kinds` defaults to `[atlatl, <target type>]` |
 | `vars` | all | Stream-scoped template variables, rendered in the load phase and available as `vars.*` / `stream.vars.*` in the plan phase, scoped to the stream rather than the process. `--var k=v` overrides one for a run, as a string, in the plan phase and in what reads `vars` at run time (REST expressions, `from.files`) |
+
+The ingest-only keys `on_cast_error`, `on_decode_error`, `chunk`, `infer`, `null_keys`, `duplicates`, `order_by`, `flatten`, `naming` and `table_drift` are a `config` error (`mode-key`) on a `cdc` stream of either kind (lake → serving, postgres `changes`) when set on the stream or in its own replication's (or `then` hop's) `defaults`; change capture reads none of them. Project-level `defaults` of these keys skip cdc streams: they're dropped from the stream's config, with no error, so a project can set ingest defaults beside change capture. This may be tightened later.
+
+`flatten` is not implemented yet: on any stream it's a `config` error (`not-implemented`; on a cdc stream, the `mode-key` one above).
 
 ```yaml
 - id: org_event/hub
@@ -274,4 +278,4 @@ columns:
 - `atlatl json-schema <project|replications|source-schema|plan|report|events>` prints the JSON Schemas for editor integration and consumers. `config` is an alias for `project`. `report` and `events` arrive with M0.15.
 - `atlatl plan --static` doesn't select an environment, render templates or read secrets. It checks every environment's connection structure and base rule. Every stream needs an explicit `mode`: there is no default.
 - Until the REST engine (M3), API specs are read only for dependency analysis (`endpoints.*.{emit, for_each.over.queue, depends_on}`). A queue producer must be read by a stream in the same replication.
-- `atlatl plan [--env] [--replication …] [--instance …] --json` prints the fully resolved plan. With `--discover` it expands postgres wildcards against the source catalog, listing each member's target and resolved primary key (other sources' wildcards still need a run); otherwise it lists patterns.
+- `atlatl plan [--env] [--replication …] [--instance …] --json` prints the fully resolved plan. With `--discover` it expands postgres wildcards against the source catalog, listing each member's target and resolved primary key (other sources' wildcards still need a run), and checks the column types of postgres and clickhouse streams into a lake or DuckDB file; otherwise it lists patterns.

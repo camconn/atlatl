@@ -352,7 +352,7 @@ async fn the_type_gate_reads_describe() {
             .await
             .expect(e)
             .columns;
-        types::check(&cols).unwrap_or_else(|err| panic!("{e}: {}", err.message));
+        types::check(&cols).unwrap_or_else(|err| panic!("{e}: {err:?}"));
     }
     for (e, want) in refused {
         let cols = c
@@ -361,7 +361,7 @@ async fn the_type_gate_reads_describe() {
             .expect(e)
             .columns;
         let err = types::check(&cols).expect_err(e);
-        assert!(err.message.contains(want), "{e}: {}", err.message);
+        assert!(err[0].contains(want), "{e}: {err:?}");
     }
 }
 

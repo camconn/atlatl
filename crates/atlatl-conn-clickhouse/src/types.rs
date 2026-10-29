@@ -14,9 +14,6 @@
 //! Floating-point precision loss is accepted, as elsewhere: `Decimal` wider than 38 digits arrives
 //! as `DOUBLE`.
 
-use atlatl_core::AtlatlError;
-use atlatl_core::error::Result;
-
 use crate::ident;
 
 /// A top-level 128-bit integer column: its name and the DuckDB type it lands as.
@@ -27,28 +24,34 @@ pub struct Wide {
 }
 
 /// Checks `cols` (name, ClickHouse type from `DESCRIBE`) and returns the 128-bit integer columns
-/// to fetch as text; a type the target can't hold is `config`.
-pub fn check(cols: &[(String, String)]) -> Result<Vec<Wide>> {
+/// to fetch as text, or a line for every column the target can't hold.
+pub fn check(cols: &[(String, String)]) -> std::result::Result<Vec<Wide>, Vec<String>> {
     let mut wide = Vec::new();
+    let mut refused = Vec::new();
     for (name, ty) in cols {
-        let refuse = |inner: &str, why: &str| {
-            let of = if inner == ty {
-                String::new()
-            } else {
-                format!(" (its {inner})")
-            };
-            AtlatlError::config(format!(
-                "column `{name}` is {ty}{of}, which the target can't hold: {why}"
-            ))
-        };
-        if let Some(cast) = visit(ty, true).map_err(|(inner, why)| refuse(&inner, &why))? {
-            wide.push(Wide {
+        match visit(ty, true) {
+            Ok(Some(cast)) => wide.push(Wide {
                 name: name.clone(),
                 cast,
-            });
+            }),
+            Ok(None) => {}
+            Err((inner, why)) => {
+                let of = if &inner == ty {
+                    String::new()
+                } else {
+                    format!(" (its {inner})")
+                };
+                refused.push(format!(
+                    "column `{name}` is {ty}{of}, which the target can't hold: {why}"
+                ));
+            }
         }
     }
-    Ok(wide)
+    if refused.is_empty() {
+        Ok(wide)
+    } else {
+        Err(refused)
+    }
 }
 
 /// `Some(cast)` for a top-level 128-bit integer; the offending type and why on a refusal.
@@ -118,7 +121,7 @@ fn visit(ty: &str, top: bool) -> std::result::Result<Option<&'static str>, (Stri
 
 /// A type's name and its top-level arguments: `Map(String, Array(Int8))` is `Map` and
 /// `[String, Array(Int8)]`. Quotes (enum labels, time zones) and backticks are skipped over.
-fn split(ty: &str) -> (&str, Vec<&str>) {
+pub(crate) fn split(ty: &str) -> (&str, Vec<&str>) {
     let Some(open) = ty.find('(') else {
         return (ty, Vec::new());
     };
@@ -153,7 +156,7 @@ fn split(ty: &str) -> (&str, Vec<&str>) {
 
 /// A tuple element's type, without its name: `x Array(Int8)` and `` `a b` UInt8 `` give the type;
 /// an unnamed element is all type.
-fn element_type(el: &str) -> &str {
+pub(crate) fn element_type(el: &str) -> &str {
     let el = el.trim();
     if let Some(rest) = el.strip_prefix('`') {
         return rest.find('`').map_or(el, |i| rest[i + 1..].trim());
@@ -217,7 +220,7 @@ mod tests {
     }
 
     fn refusal(ty: &str) -> String {
-        check(&cols(&[("x", ty)])).expect_err(ty).message
+        check(&cols(&[("x", ty)])).expect_err(ty).remove(0)
     }
 
     #[test]
@@ -306,6 +309,24 @@ mod tests {
         assert_eq!(
             refusal("Array(Nullable(IPv4))"),
             "column `x` is Array(Nullable(IPv4)) (its IPv4), which the target can't hold: there's no IP address type, and it would arrive as a number or raw bytes; convert it in `from.query` (`toString(x)`)"
+        );
+    }
+
+    #[test]
+    fn names_every_refused_column() {
+        let bad = check(&cols(&[
+            ("id", "UInt8"),
+            ("ip", "IPv4"),
+            ("big", "Int128"),
+            ("e", "Enum8('a' = 1)"),
+        ]))
+        .expect_err("refused");
+        assert_eq!(bad.len(), 2, "{bad:?}");
+        assert!(bad[0].starts_with("column `ip` is IPv4"), "{}", bad[0]);
+        assert!(
+            bad[1].starts_with("column `e` is Enum8('a' = 1)"),
+            "{}",
+            bad[1]
         );
     }
 

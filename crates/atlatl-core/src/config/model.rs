@@ -839,6 +839,28 @@ pub struct MemberConfig {
 }
 
 impl StreamConfig {
+    /// Keys change capture never reads; refused on a cdc stream unless inherited from project `defaults`.
+    pub const INGEST_ONLY: [&str; 10] = [
+        "on_cast_error",
+        "on_decode_error",
+        "chunk",
+        "infer",
+        "null_keys",
+        "duplicates",
+        "order_by",
+        "flatten",
+        "naming",
+        "table_drift",
+    ];
+
+    /// `on_cast_error.set_null`.
+    pub fn set_null(&self) -> bool {
+        self.on_cast_error
+            .as_ref()
+            .and_then(|e| e.set_null)
+            .unwrap_or(false)
+    }
+
     /// The `members` override for `member`: an exact name, else the first matching glob.
     pub fn member_config(&self, member: &str) -> Option<&MemberConfig> {
         let m = self.members.as_ref()?;
@@ -1052,6 +1074,25 @@ impl<'de> Deserialize<'de> for ColumnsConfig {
     }
 }
 
+impl ColumnsConfig {
+    /// The declared `columns.<c>.type` of a source column: its own entry, else `"*"`'s.
+    pub fn declared(&self, name: &str) -> Option<&str> {
+        self.columns
+            .get(name)
+            .and_then(|c| c.kind.as_deref())
+            .or_else(|| self.columns.get("*").and_then(|c| c.kind.as_deref()))
+    }
+
+    /// Whether `include`/`exclude` keep source column `name` (exact name, else
+    /// case-insensitive, as the Postgres source matches them).
+    pub fn keeps(&self, name: &str) -> bool {
+        let named = |list: &[String]| {
+            list.iter().any(|x| x == name) || list.iter().any(|x| x.eq_ignore_ascii_case(name))
+        };
+        self.include.as_deref().is_none_or(named) && !self.exclude.as_deref().is_some_and(named)
+    }
+}
+
 impl JsonSchema for ColumnsConfig {
     fn schema_name() -> Cow<'static, str> {
         "ColumnsConfig".into()
@@ -1156,6 +1197,10 @@ pub struct OnErrorConfig {
     /// `on_cast_error` only: a failed cast becomes NULL with a counted warning.
     pub set_null: Option<bool>,
 }
+
+/// Prefix of the flag column a source reads beside a declared column under
+/// `on_cast_error.set_null`: true where the value didn't fit and was read as NULL.
+pub const CAST_NULLED: &str = "_atlatl_nulled_";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1356,4 +1401,38 @@ pub struct SourceSchema {
     pub on_null_violation: Option<Policy>,
     pub on_domain_violation: Option<Policy>,
     pub tolerance: Option<Threshold>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declared_column_types_fall_back_to_star() {
+        let c: ColumnsConfig = serde_json::from_value(serde_json::json!({
+            "exclude": ["x"],
+            "a": {"type": "JSON"},
+            "b": {"transform": "b + 1"},
+            "*": {"type": "VARCHAR"},
+        }))
+        .expect("columns");
+        assert_eq!(c.declared("a"), Some("JSON"));
+        assert_eq!(c.declared("b"), Some("VARCHAR"));
+        assert_eq!(c.declared("A"), Some("VARCHAR"), "names match exactly");
+        let c: ColumnsConfig =
+            serde_json::from_value(serde_json::json!({"a": {"type": "JSON"}})).expect("columns");
+        assert_eq!(c.declared("z"), None);
+    }
+
+    #[test]
+    fn include_and_exclude_keep_columns() {
+        let c: ColumnsConfig = serde_json::from_value(serde_json::json!({
+            "include": ["id", "Email", "ssn"],
+            "exclude": ["SSN"],
+        }))
+        .expect("columns");
+        assert!(c.keeps("id") && c.keeps("email") && c.keeps("Email"));
+        assert!(!c.keeps("ssn") && !c.keeps("name"));
+        assert!(ColumnsConfig::default().keeps("anything"));
+    }
 }

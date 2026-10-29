@@ -27,6 +27,7 @@ pub(crate) struct StageCol {
     pub name: String,
     pub oid: u32,
     pub typmod: i32,
+    pub land: crate::types::Land,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +79,8 @@ pub(crate) struct Row {
 
 pub(crate) struct Stage {
     pub table: String,
+    /// The source table, as errors name it (`schema.table`).
+    pub label: String,
     pub cols: Vec<StageCol>,
     index: HashMap<String, usize>,
     pub pk: Vec<String>,
@@ -93,11 +96,13 @@ impl Stage {
     pub fn create(
         c: &Connection,
         table: &str,
-        cols: Vec<StageCol>,
+        label: &str,
+        mut cols: Vec<StageCol>,
         pk: Vec<String>,
     ) -> Result<Self> {
-        for col in &cols {
+        for col in &mut cols {
             reserved(&col.name)?;
+            crate::types::canonicalize(c, col)?;
         }
         let defs: Vec<String> = META
             .iter()
@@ -120,6 +125,7 @@ impl Stage {
             .collect();
         Ok(Self {
             table: table.to_owned(),
+            label: label.to_owned(),
             cols,
             index,
             pk,
@@ -134,8 +140,10 @@ impl Stage {
     /// Adds columns first seen in a Relation message; refreshes types of known ones.
     pub fn ensure_cols(&mut self, c: &Connection, cols: &[StageCol]) -> Result<()> {
         for col in cols {
+            let mut col = col.clone();
+            crate::types::canonicalize(c, &mut col)?;
             if let Some(&i) = self.index.get(&col.name) {
-                self.cols[i] = col.clone();
+                self.cols[i] = col;
                 continue;
             }
             reserved(&col.name)?;
@@ -147,7 +155,7 @@ impl Stage {
             ))
             .map_err(db)?;
             self.index.insert(col.name.clone(), self.cols.len());
-            self.cols.push(col.clone());
+            self.cols.push(col);
         }
         Ok(())
     }
@@ -462,8 +470,13 @@ impl Stage {
             let target = types
                 .get(&col.name)
                 .cloned()
-                .unwrap_or_else(|| crate::types::lake_type(col.oid, col.typmod));
-            crate::types::cast(v, col.oid, col.typmod, &target)
+                .unwrap_or_else(|| crate::types::land_type(col));
+            crate::types::cast(
+                v,
+                col,
+                &target,
+                &format!("column `{}` of `{}`", col.name, self.label),
+            )
         };
         let join_lake = lake.filter(|_| !self.toast.is_empty());
         let exprs: Vec<String> = self
@@ -587,9 +600,21 @@ pub(crate) fn copy_fields(line: &[u8]) -> Result<Vec<Option<String>>> {
                     other => out.push(other),
                 }
             }
-            String::from_utf8(out).map(Some).map_err(|_| bad())
+            utf8(out).map(Some).ok_or_else(bad)
         })
         .collect()
+}
+
+/// A lone non-ASCII byte is a `"char"` that Postgres before 15 sends as is; it's written as the
+/// octal escape later versions send.
+pub(crate) fn utf8(b: Vec<u8>) -> Option<String> {
+    String::from_utf8(b).map_or_else(
+        |e| match e.as_bytes() {
+            [x] if *x >= 0x80 => Some(format!("\\{x:03o}")),
+            _ => None,
+        },
+        Some,
+    )
 }
 
 #[cfg(test)]
@@ -608,6 +633,11 @@ mod tests {
             ]
         );
         assert_eq!(copy_fields(b"").expect("row"), vec![Some(String::new())]);
+        assert_eq!(
+            copy_fields(b"\xe9\t\xc3\xa9").expect("row"),
+            vec![Some("\\351".into()), Some("é".into())]
+        );
+        assert!(copy_fields(b"\xe9\xe9").is_err());
     }
 
     fn col(n: &str, oid: u32) -> StageCol {
@@ -615,6 +645,7 @@ mod tests {
             name: n.into(),
             oid,
             typmod: -1,
+            land: Default::default(),
         }
     }
 
@@ -659,6 +690,7 @@ mod tests {
         let mut s = Stage::create(
             &c,
             "stg",
+            "public.t",
             vec![col("id", 23), col("v", 25), col("big", 25)],
             vec!["id".into()],
         )
@@ -714,6 +746,7 @@ mod tests {
         let mut s = Stage::create(
             &c,
             "stg",
+            "public.t",
             vec![col("id", 23), col("v", 25), col("big", 25)],
             vec!["id".into()],
         )
@@ -768,8 +801,14 @@ mod tests {
     #[test]
     fn discarding_an_open_transaction() {
         let c = Connection::open_in_memory().expect("db");
-        let mut s =
-            Stage::create(&c, "stg", vec![col("id", 23)], vec!["id".into()]).expect("stage");
+        let mut s = Stage::create(
+            &c,
+            "stg",
+            "public.t",
+            vec![col("id", 23)],
+            vec!["id".into()],
+        )
+        .expect("stage");
         for seq in 1..=3 {
             let mut r = row(seq, Op::Insert, &seq.to_string(), None, &[]);
             r.txn = seq;
@@ -797,6 +836,7 @@ mod tests {
         let mut s = Stage::create(
             &c,
             "stg",
+            "public.t",
             vec![col("id", 23), col("v", 25)],
             vec!["id".into()],
         )

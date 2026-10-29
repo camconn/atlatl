@@ -86,6 +86,8 @@ pub struct SourceColumn {
     pub scale: Option<i64>,
     /// The DuckDB type the read-back casts to, with the source precision and scale.
     pub duck_type: String,
+    /// Why the target can't hold it as is, and what to do (see [`admit`]); `duck_type` is empty.
+    pub refused: Option<String>,
 }
 
 impl SourceColumn {
@@ -147,8 +149,16 @@ pub fn parse_columns(rs: &ResultSet, object: &str) -> Result<Vec<SourceColumn>> 
             let char_len = rs.int(i, "character_maximum_length");
             let precision = rs.int(i, "numeric_precision").or(tp);
             let scale = rs.int(i, "numeric_scale").or(ts);
-            let duck_type = duck_type(&data_type, precision, scale)
-                .map_err(|m| AtlatlError::config(format!("{object}.{name}: {m}")))?;
+            let (duck_type, refused) = match duck_type(&data_type, precision, scale) {
+                Ok(t) => (t, None),
+                Err(m) => (
+                    String::new(),
+                    Some(format!(
+                        "column `{name}` is {data_type}, which the target can't hold: {}",
+                        m.replace("{c}", &ident(&name)).replace("{n}", &name)
+                    )),
+                ),
+            };
             Ok(SourceColumn {
                 name,
                 data_type,
@@ -156,13 +166,43 @@ pub fn parse_columns(rs: &ResultSet, object: &str) -> Result<Vec<SourceColumn>> 
                 precision,
                 scale,
                 duck_type,
+                refused,
             })
         })
         .collect()
 }
 
+/// Opts `super` columns in by a declared JSON or VARCHAR type (`declared(name)`: `columns.<c>.type`
+/// or `"*"`), read as `JSON_SERIALIZE` text; every column still refused is a line in the error.
+pub fn admit(
+    cols: Vec<SourceColumn>,
+    declared: &dyn Fn(&str) -> Option<String>,
+) -> std::result::Result<Vec<SourceColumn>, Vec<String>> {
+    let mut bad = Vec::new();
+    let out = cols
+        .into_iter()
+        .map(|mut c| {
+            let Some(why) = &c.refused else { return c };
+            let text = declared(&c.name).filter(|k| {
+                matches!(
+                    k.trim().to_ascii_uppercase().as_str(),
+                    "JSON" | "VARCHAR" | "TEXT"
+                )
+            });
+            if c.data_type == "super" && text.is_some() {
+                c.duck_type = "VARCHAR".into();
+                c.refused = None;
+            } else {
+                bad.push(why.clone());
+            }
+            c
+        })
+        .collect();
+    if bad.is_empty() { Ok(out) } else { Err(bad) }
+}
+
 /// Redshift `svv_columns.data_type` → DuckDB. Numerics keep their precision and scale (Redshift's
-/// default is `numeric(18,0)`).
+/// default is `numeric(18,0)`). A refusal says why and what to do, `{c}` standing for the column.
 pub fn duck_type(
     data_type: &str,
     precision: Option<i64>,
@@ -178,7 +218,9 @@ pub fn duck_type(
             let p = precision.filter(|p| *p > 0).unwrap_or(18);
             let s = scale.unwrap_or(0);
             if !(1..=38).contains(&p) || s < 0 || s > p {
-                return Err(format!("unsupported numeric({p},{s})"));
+                return Err(format!(
+                    "numeric({p},{s}) isn't a decimal it holds; exclude it with `columns.exclude`, or convert it in a view (`{{c}}::numeric(38,s)`)"
+                ));
             }
             format!("DECIMAL({p},{s})")
         }
@@ -192,13 +234,17 @@ pub fn duck_type(
         "timestamp with time zone" | "timestamptz" => "TIMESTAMPTZ".into(),
         "time without time zone" | "time" => "TIME".into(),
         "time with time zone" | "timetz" => "TIMETZ".into(),
-        "super" => "VARCHAR".into(),
-        "binary varying" | "varbyte" | "varbinary" | "geometry" | "geography" | "hllsketch" => {
-            return Err(format!(
-                "`{data_type}` can't be unloaded to Parquet; exclude the column"
-            ));
+        "super" => {
+            return Err("there's no semi-structured type, and its text depends on the read path; declare `columns.{n}.type` (JSON or VARCHAR) to read it as `JSON_SERIALIZE({c})`, or exclude it with `columns.exclude`".into());
         }
-        _ => return Err(format!("unsupported Redshift type `{data_type}`")),
+        "binary varying" | "varbyte" | "varbinary" | "geometry" | "geography" | "hllsketch" => {
+            return Err(
+                "it can't be unloaded to Parquet; exclude it with `columns.exclude`".into(),
+            );
+        }
+        _ => {
+            return Err("atlatl doesn't land this type from Redshift; exclude it with `columns.exclude`, or convert it in a view".into());
+        }
     })
 }
 
@@ -444,6 +490,54 @@ mod tests {
         );
         assert_eq!(c[2].char_len, Some(64));
         assert!(parse_columns(&ResultSet::default(), "s.t").is_err());
+    }
+
+    #[test]
+    fn super_is_refused_unless_declared() {
+        let r = rs(
+            &[
+                "column_name",
+                "data_type",
+                "character_maximum_length",
+                "numeric_precision",
+                "numeric_scale",
+            ],
+            &[
+                &[Some("id"), Some("bigint"), None, Some("64"), Some("0")],
+                &[Some("payload"), Some("super"), None, None, None],
+                &[Some("blob"), Some("binary varying"), None, None, None],
+            ],
+        );
+        let c = parse_columns(&r, "s.t").expect("refusals don't fail the lookup");
+        assert_eq!(c[0].refused, None);
+        assert_eq!(
+            c[1].refused.as_deref(),
+            Some(
+                "column `payload` is super, which the target can't hold: there's no semi-structured type, and its text depends on the read path; declare `columns.payload.type` (JSON or VARCHAR) to read it as `JSON_SERIALIZE(\"payload\")`, or exclude it with `columns.exclude`"
+            )
+        );
+        let none = |_: &str| None;
+        assert_eq!(admit(c.clone(), &none).expect_err("refused").len(), 2);
+        let json = |n: &str| (n == "payload").then(|| "json".to_owned());
+        let bad = admit(c.clone(), &json).expect_err("blob still refused");
+        assert_eq!(bad.len(), 1);
+        assert!(
+            bad[0].starts_with("column `blob` is binary varying, "),
+            "{}",
+            bad[0]
+        );
+        let ok = admit(c[..2].to_vec(), &json).expect("declared");
+        assert_eq!(
+            (ok[1].duck_type.as_str(), ok[1].refused.as_deref()),
+            ("VARCHAR", None)
+        );
+        let ts = |_: &str| Some("TIMESTAMP".to_owned());
+        assert!(admit(c[..2].to_vec(), &ts).is_err(), "only text holds it");
+        assert_eq!(
+            crate::unload::select_sql(&Object::parse("s.t"), &ok, &[], None),
+            r#"SELECT "id", JSON_SERIALIZE("payload") AS "payload" FROM "s"."t""#
+        );
+        assert!(duck_type("super", None, None).is_err());
     }
 
     #[test]

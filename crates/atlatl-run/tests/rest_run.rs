@@ -721,6 +721,55 @@ async fn infer_safe_types_from_the_full_staged_set() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn number_literals_land_exactly() {
+    let m = Mock::start(|_, _| json(r#"[{"a": 0.12345678901234567891, "b": 12345678901234567.891, "c": {"x": 0.12345678901234567891}, "d": [1.10]}]"#.into())).await;
+    let spec = format!(
+        "base_url: {}\nendpoints:\n  typed:\n    request: {{path: /t}}\n    records: {{path: \"[]\"}}\n",
+        m.url
+    );
+    for (infer, types) in [
+        ("text", ["VARCHAR", "VARCHAR"]),
+        ("safe", ["DECIMAL(38,20)", "DECIMAL(38,3)"]),
+    ] {
+        let reps = format!(
+            "replications:\n  r:\n    source: api\n    target: lake\n    streams:\n      - {{id: api/typed, from: {{endpoint: typed}}, object: br.typed, mode: full-refresh, infer: {infer}}}\n"
+        );
+        let e = env(&spec, &reps, "");
+        let rt = runtime(&e, all()).await;
+        let mut session = rt.engine.session().expect("session");
+        let staged = stage_all(&rt, &mut session).await.expect("stage");
+        let stg = staged[0].1.staging.clone().expect("stg");
+        let cols = rows(
+            &mut session,
+            &format!("SELECT column_type FROM (DESCRIBE temp.main.{stg})"),
+        )
+        .await;
+        assert_eq!(
+            cols,
+            vec![
+                format!(r#"{{"column_type":"{}"}}"#, types[0]),
+                format!(r#"{{"column_type":"{}"}}"#, types[1]),
+                r#"{"column_type":"VARCHAR"}"#.to_owned(),
+                r#"{"column_type":"VARCHAR"}"#.to_owned(),
+            ],
+            "{infer}"
+        );
+        let v = rows(
+            &mut session,
+            &format!("SELECT a::VARCHAR AS a, b::VARCHAR AS b, c, d FROM temp.main.{stg}"),
+        )
+        .await;
+        assert_eq!(
+            v,
+            vec![
+                r#"{"a":"0.12345678901234567891","b":"12345678901234567.891","c":"{\"x\":0.12345678901234567891}","d":"[1.10]"}"#
+            ],
+            "{infer}"
+        );
+    }
+}
+
 const QUERY_REPS: &str = r#"replications:
   r:
     source: api

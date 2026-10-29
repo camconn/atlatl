@@ -240,6 +240,14 @@ impl Engine {
         setup
             .register_scalar_function::<crate::json_canon::JsonCanon>(crate::json_canon::FUNCTION)
             .db()?;
+        setup
+            .register_scalar_function::<crate::json_exact::JsonExact>(crate::json_exact::FUNCTION)
+            .db()?;
+        setup
+            .register_scalar_function::<crate::decimal_text::DecimalText>(
+                crate::decimal_text::FUNCTION,
+            )
+            .db()?;
         let pool_size = opts
             .pool_size
             .unwrap_or_else(|| (b.threads as usize).max(2))

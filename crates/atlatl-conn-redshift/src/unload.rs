@@ -94,7 +94,7 @@ pub fn unload_sql(select: &str, to: &str, iam_role: &str, max_mb: u64) -> String
     )
 }
 
-/// `SELECT "c1", … FROM ["db".]"s"."t" [WHERE (f1) AND (f2)]`. An outer `LIMIT` isn't allowed in
+/// `SELECT "c1", … FROM ["db".]"s"."t" [WHERE (f1) AND (f2)]`, a (declared) `super` serialized. An outer `LIMIT` isn't allowed in
 /// an UNLOAD, so a limit nests the select in a derived table.
 pub fn select_sql(
     object: &Object,
@@ -107,7 +107,14 @@ pub fn select_sql(
     } else {
         columns
             .iter()
-            .map(|c| ident(&c.name))
+            .map(|c| {
+                let i = ident(&c.name);
+                if c.data_type == "super" {
+                    format!("JSON_SERIALIZE({i}) AS {i}")
+                } else {
+                    i
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -464,6 +471,7 @@ mod tests {
             precision: p,
             scale: s,
             duck_type: duck_type(t, p, s).expect("type"),
+            refused: None,
         }
     }
 

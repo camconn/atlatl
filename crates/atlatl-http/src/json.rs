@@ -825,6 +825,28 @@ mod tests {
         back
     }
 
+    /// Needs serde_json's `float_roundtrip`: its default parser can land an ulp off, which would
+    /// shift a saved cursor.
+    #[test]
+    fn saved_floats_keep_their_bits() {
+        for text in [
+            "0.00018313042101781934",
+            "2.2250738585072014e-308",
+            "4.9e-324",
+            "1.7976931348623157e308",
+            "0.30000000000000004",
+            "9007199254740993.5",
+        ] {
+            let v = parse_str(text).expect(text);
+            let saved = serde_json::to_string(&v.to_serde_exact()).expect("text");
+            let back = JValue::from_serde_exact(&serde_json::from_str(&saved).expect("json"));
+            let (JValue::Number(a), JValue::Number(b)) = (&v, &back) else {
+                panic!("{text}");
+            };
+            assert_eq!(a.as_f64().to_bits(), b.as_f64().to_bits(), "{text}");
+        }
+    }
+
     #[test]
     fn exact_serde_copies_round_trip() {
         let v = parse_str(

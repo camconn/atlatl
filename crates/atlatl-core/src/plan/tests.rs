@@ -1019,8 +1019,20 @@ fn clickhouse_and_bind_checks() {
 
     let cases = [
         (
-            "        from: {table: t}\n        update_key: {column: ts}\n",
-            "[update-key] stream `c/a`: clickhouse sources don't take `update_key` (filter in `from.query`)",
+            "        from: {query: 'SELECT * FROM t WHERE {incremental_where_cond}'}\n",
+            "[update-key] stream `c/a`: `from.query` reads `{incremental_where_cond}` or `{incremental_value}`, which need `update_key`",
+        ),
+        (
+            "        from: {query: 'SELECT {{ bind.ids }}'}\n        bind: {ids: {query: 'SELECT 1', connection: seed, fallback: ' '}}\n",
+            "[bind] stream `c/a`: `bind.ids.fallback` is empty",
+        ),
+        (
+            "        from: {query: 'SELECT {{ bind.ids }}'}\n        bind: {ids: {query: 'SELECT 1', connection: seed, batch: 5, concurrency: 0}}\n",
+            "[bind] stream `c/a`: `bind.ids.concurrency` must be at least 1",
+        ),
+        (
+            "        from: {query: 'SELECT {{ bind.ids }}'}\n        bind: {ids: {query: 'SELECT 1', connection: seed, concurrency: 4}}\n",
+            "[bind] stream `c/a`: `bind.ids.concurrency` applies to a batched list (set `batch`)",
         ),
         (
             "        from: {tables: 't*'}\n",
@@ -1062,6 +1074,32 @@ fn clickhouse_and_bind_checks() {
     for (extra, want) in cases {
         let errs = shape_errors(&stream(extra));
         assert!(errs.iter().any(|e| e == want), "{extra}: {errs:?}");
+    }
+    let errs = shape_errors(
+        &stream("        from: {query: 'SELECT * FROM t'}\n        update_key: {column: d}\n        primary_key: [id]\n")
+            .replace("mode: full-refresh", "mode: incremental"),
+    );
+    assert!(
+        errs.iter().any(|e| e
+            == "[update-key] stream `c/a`: `update_key` needs `from.query` to bound the pull with `{incremental_where_cond}` or `{incremental_value}`"),
+        "{errs:?}"
+    );
+    for from in [
+        "{query: 'SELECT * FROM t WHERE {incremental_where_cond} AND d > coalesce({incremental_value}, 0)'}",
+        "{table: t}",
+    ] {
+        let f = Fixture::new(&[(
+            "replications/c.yaml",
+            &stream(&format!(
+                "        from: {from}\n        update_key: {{column: d, lookback: 7d}}\n        primary_key: [id]\n"
+            ))
+            .replace("mode: full-refresh", "mode: incremental"),
+        )]);
+        f.plan(&PlanRequest {
+            env: Some("dev".into()),
+            ..PlanRequest::all()
+        })
+        .unwrap_or_else(|d| panic!("{from}: {d:?}"));
     }
     let errs = shape_errors(
         &stream("        from: {query: 'SELECT 1'}\n")

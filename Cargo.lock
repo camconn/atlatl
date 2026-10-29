@@ -713,6 +713,7 @@ dependencies = [
  "futures",
  "indexmap",
  "minijinja",
+ "serde",
  "serde_json",
  "tar",
  "tempfile",

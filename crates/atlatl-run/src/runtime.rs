@@ -40,6 +40,11 @@ pub struct Runtime {
     /// records to, if any.
     pub rest_clients:
         std::sync::Mutex<IndexMap<String, (atlatl_http::ApiClient, Option<atlatl_http::Cassette>)>>,
+    /// Redshift wire pools by connection (`max_concurrency` sessions), shared by every unit in the
+    /// run.
+    pub redshift_wires: std::sync::Mutex<IndexMap<String, atlatl_conn_redshift::Wire>>,
+    /// ClickHouse query slots by connection (`max_concurrency`), shared by every unit in the run.
+    pub clickhouse_slots: std::sync::Mutex<IndexMap<String, Arc<tokio::sync::Semaphore>>>,
     /// `for_each` replications whose items couldn't be listed; they fail with this when run.
     pub for_each_errors: IndexMap<String, AtlatlError>,
     /// `atlatl run --dry-run`: stage, validate and diff, never commit.

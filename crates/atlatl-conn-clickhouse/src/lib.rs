@@ -3,8 +3,12 @@
 //! rather than mid-body; the Parquet result streams to a local file that the engine reads.
 
 pub mod bind;
+pub mod incremental;
+pub mod types;
 
+use std::future::Future;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use atlatl_core::config::model::ClickhouseConn;
@@ -15,6 +19,7 @@ use atlatl_core::{AtlatlError, redact::redact};
 use percent_encoding::percent_decode_str;
 use reqwest::Url;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(600);
@@ -28,11 +33,38 @@ const RESERVED: [&str; 5] = [
     "database",
     "max_execution_time",
 ];
-const PARQUET_TYPES: [(&str, &str); 3] = [
+/// Exact decimal-to-float parsing. The default parser can be an ulp off for `Float32` (subnormals,
+/// large exponents), and a `CAST('…' AS Float32)` watermark or quoted bind value would then sit
+/// beside the stored value, not on it. Also atlatl's alone.
+const PRECISE_FLOATS: (&str, &str) = ("precise_float_parsing", "1");
+/// How types reach Parquet, which [`types`] checks against; also atlatl's alone. The legacy
+/// encoder (`use_custom_encoder=0`) writes `DateTime` as epoch seconds whatever the rest say.
+/// `output_format_parquet_unsupported_types_as_binary` isn't sent (it's newer than the servers
+/// these must work with, and [`types::check`] refuses every type it affects), only refused.
+const PARQUET_TYPES: [(&str, &str); 4] = [
     ("output_format_parquet_date_as_uint16", "0"),
     ("output_format_parquet_datetime_as_uint32", "0"),
     ("output_format_parquet_string_as_string", "1"),
+    ("output_format_parquet_use_custom_encoder", "1"),
 ];
+/// The `output_format_parquet_*` settings a connection or query may set: file layout only, checked
+/// not to change what lands. Any other (a new one included) might, so it's refused.
+const PARQUET_TUNING: [&str; 13] = [
+    "output_format_parquet_compression_method",
+    "output_format_parquet_row_group_size",
+    "output_format_parquet_row_group_size_bytes",
+    "output_format_parquet_data_page_size",
+    "output_format_parquet_batch_size",
+    "output_format_parquet_parallel_encoding",
+    "output_format_parquet_write_page_index",
+    "output_format_parquet_write_bloom_filter",
+    "output_format_parquet_bloom_filter_bits_per_value",
+    "output_format_parquet_bloom_filter_flush_threshold_bytes",
+    "output_format_parquet_max_dictionary_size",
+    "output_format_parquet_write_checksums",
+    "output_format_parquet_version",
+];
+const PARQUET_PREFIX: &str = "output_format_parquet_";
 
 /// Where and as whom queries run, from the connection's fields or its `dsn`.
 #[derive(Clone, PartialEq, Eq)]
@@ -166,6 +198,9 @@ pub struct Options {
     pub statement_timeout: Duration,
     pub retry: RetryPolicy,
     pub settings: Vec<(String, String)>,
+    /// Queries in flight on the connection (`max_concurrency`), one permit each; shared by every
+    /// client made for it in a run.
+    pub slots: Option<Arc<Semaphore>>,
 }
 
 impl Default for Options {
@@ -175,8 +210,16 @@ impl Default for Options {
             statement_timeout: DEFAULT_STATEMENT_TIMEOUT,
             retry: RetryPolicy::default(),
             settings: Vec::new(),
+            slots: None,
         }
     }
+}
+
+/// A query's columns, from `DESCRIBE`.
+#[derive(Debug, Default)]
+pub struct Described {
+    pub columns: Vec<(String, String)>,
+    pub retries: Vec<AttemptRecord>,
 }
 
 /// One query's result on disk.
@@ -203,14 +246,23 @@ impl ClickHouse {
     }
 
     pub fn with_endpoint(ep: Endpoint, opts: Options) -> Result<Self> {
-        if let Some((k, _)) = opts
-            .settings
-            .iter()
-            .find(|(k, _)| RESERVED.contains(&k.to_ascii_lowercase().as_str()))
-        {
-            return Err(AtlatlError::config(format!(
-                "clickhouse setting `{k}` is set by atlatl (it keeps queries read-only and whole); use `database` or `timeouts.statement` for those"
-            )));
+        for (k, _) in &opts.settings {
+            let k = k.to_ascii_lowercase();
+            if RESERVED.contains(&k.as_str()) {
+                return Err(AtlatlError::config(format!(
+                    "clickhouse setting `{k}` is set by atlatl (it keeps queries read-only and whole); use `database` or `timeouts.statement` for those"
+                )));
+            }
+            if k == PRECISE_FLOATS.0 {
+                return Err(AtlatlError::config(format!(
+                    "clickhouse setting `{k}` is set by atlatl: watermarks and bind values rely on exact float parsing"
+                )));
+            }
+            if k.starts_with(PARQUET_PREFIX) && !PARQUET_TUNING.contains(&k.as_str()) {
+                return Err(AtlatlError::config(format!(
+                    "clickhouse setting `{k}` could change what types land; only Parquet layout settings (compression, row groups, pages, bloom filters) may be set, so convert columns in `from.query` instead"
+                )));
+            }
         }
         let http = atlatl_core::tls::http_client()
             .connect_timeout(opts.connect_timeout)
@@ -224,31 +276,85 @@ impl ClickHouse {
         &self.ep
     }
 
-    /// Runs `sql` and writes its Parquet result to `path` (replaced on each attempt). Retries
-    /// follow `Options::retry`.
+    /// Runs `sql` and writes its Parquet result to `path` (replaced on each attempt).
     pub async fn query_to_file(
         &self,
         sql: &str,
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<Fetched> {
+        let (bytes, retries) = self.attempts(cancel, || self.attempt(sql, path)).await?;
+        Ok(Fetched { bytes, retries })
+    }
+
+    /// `query`'s result columns (name and ClickHouse type), from `DESCRIBE`; nothing runs.
+    pub async fn describe(&self, query: &str, cancel: &CancellationToken) -> Result<Described> {
+        let sql = format!(
+            "DESCRIBE ({}\n) FORMAT JSONCompactEachRow",
+            types::trimmed(query)
+        );
+        let (body, retries) = self
+            .attempts(cancel, || async {
+                self.post(&sql).await?.text().await.map_err(transport)
+            })
+            .await?;
+        let columns = body
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let row: Vec<serde_json::Value> = serde_json::from_str(l).map_err(|e| {
+                    AtlatlError::new(ErrorClass::Decode, format!("clickhouse DESCRIBE row: {e}"))
+                })?;
+                match (row.first(), row.get(1)) {
+                    (Some(serde_json::Value::String(n)), Some(serde_json::Value::String(t))) => {
+                        Ok((n.clone(), t.clone()))
+                    }
+                    _ => Err(AtlatlError::new(
+                        ErrorClass::Decode,
+                        format!("clickhouse DESCRIBE row without a name and type: {l}"),
+                    )),
+                }
+            })
+            .collect::<Result<_>>()?;
+        Ok(Described { columns, retries })
+    }
+
+    /// Runs `op` under `Options::retry`, each attempt holding one of the connection's slots and
+    /// giving up when `cancel` fires.
+    async fn attempts<T, F, Fut>(
+        &self,
+        cancel: &CancellationToken,
+        op: F,
+    ) -> Result<(T, Vec<AttemptRecord>)>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
         let mut retries = Vec::new();
         let mut jitter = RandomJitter::new();
-        let bytes = retry(
+        let v = retry(
             &self.opts.retry,
             RetryLevel::Query,
             &mut jitter,
             |a| retries.push(a.clone()),
             |_| async {
                 tokio::select! {
-                    r = self.attempt(sql, path) => r,
+                    r = async {
+                        let _slot = match &self.opts.slots {
+                            Some(s) => Some(s.acquire().await.map_err(|_| {
+                                AtlatlError::internal("clickhouse connection slots closed")
+                            })?),
+                            None => None,
+                        };
+                        op().await
+                    } => r,
                     _ = cancel.cancelled() => Err(AtlatlError::new(ErrorClass::Killed, "killed during a clickhouse query")),
                 }
             },
         )
         .await
         .map_err(|e| e.error)?;
-        Ok(Fetched { bytes, retries })
+        Ok((v, retries))
     }
 
     fn url(&self) -> Result<Url> {
@@ -265,10 +371,11 @@ impl ClickHouse {
                     &self.opts.statement_timeout.as_secs().max(1).to_string(),
                 );
             // Server defaults differ (ClickHouse Cloud sends `Date` as days in a UInt16): ask for
-            // logical types. `settings` come after, so a connection can still override them.
+            // logical types. A connection's `settings` can't override these (`with_endpoint`).
             for (k, v) in PARQUET_TYPES {
                 q.append_pair(k, v);
             }
+            q.append_pair(PRECISE_FLOATS.0, PRECISE_FLOATS.1);
             for (k, v) in &self.opts.settings {
                 q.append_pair(k, v);
             }
@@ -276,7 +383,8 @@ impl ClickHouse {
         Ok(u)
     }
 
-    async fn attempt(&self, sql: &str, path: &Path) -> Result<u64> {
+    /// Sends `sql`; a non-success answer is a classified error.
+    async fn post(&self, sql: &str) -> Result<reqwest::Response> {
         let resp = self
             .http
             .post(self.url()?)
@@ -302,7 +410,12 @@ impl ClickHouse {
             let body = resp.text().await.unwrap_or_default();
             return Err(classify(status, code, &body).retry_after(wait));
         }
-        let mut resp = resp;
+        Ok(resp)
+    }
+
+    async fn attempt(&self, sql: &str, path: &Path) -> Result<u64> {
+        let mut resp = self.post(sql).await?;
+        let status = resp.status().as_u16();
         let mut f = tokio::fs::File::create(path)
             .await
             .map_err(|e| AtlatlError::internal(format!("create {}: {e}", path.display())))?;
@@ -330,6 +443,38 @@ impl ClickHouse {
             ));
         }
         Ok(n)
+    }
+}
+
+/// A setting atlatl owns that `query` names (in a `SETTINGS` clause): `precise_float_parsing`, or
+/// an `output_format_parquet_*` one other than layout tuning, which could change what types land
+/// behind [`types::check`]'s back. A mention in a comment or string counts too.
+pub fn sets_owned_setting(query: &str) -> Option<String> {
+    let q = query.to_ascii_lowercase();
+    if q.contains(PRECISE_FLOATS.0) {
+        return Some(PRECISE_FLOATS.0.to_owned());
+    }
+    q.match_indices(PARQUET_PREFIX)
+        .map(|(i, _)| {
+            q[i..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .find(|k| !PARQUET_TUNING.contains(&k.as_str()))
+}
+
+/// A backtick-quoted ClickHouse identifier.
+pub fn ident(name: &str) -> String {
+    format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"))
+}
+
+/// `database.table` as a quoted ClickHouse name. Only the first dot separates (ClickHouse names
+/// have two levels), so a table name may contain dots.
+pub fn table_name(name: &str) -> String {
+    match name.split_once('.') {
+        Some((db, t)) => format!("{}.{}", ident(db), ident(t)),
+        None => ident(name),
     }
 }
 
@@ -407,23 +552,74 @@ mod tests {
     }
 
     #[test]
-    fn asks_for_logical_parquet_types_before_connection_settings() {
+    fn asks_for_logical_parquet_types() {
         let c = ClickHouse::with_endpoint(
             parse_dsn("clickhouse://h:8123/db").expect("dsn"),
             Options {
-                settings: vec![("output_format_parquet_date_as_uint16".into(), "1".into())],
+                settings: vec![
+                    ("max_threads".into(), "2".into()),
+                    (
+                        "output_format_parquet_compression_method".into(),
+                        "lz4".into(),
+                    ),
+                ],
                 ..Options::default()
             },
         )
         .expect("client");
         let q = c.url().expect("url");
         let pairs: Vec<(String, String)> = q.query_pairs().into_owned().collect();
-        let at = |k: &str, v: &str| pairs.iter().position(|p| p.0 == k && p.1 == v);
-        assert!(at("readonly", "2").is_some());
-        assert!(at("output_format_parquet_datetime_as_uint32", "0").is_some());
-        let ours = at("output_format_parquet_date_as_uint16", "0").expect("default");
-        let theirs = at("output_format_parquet_date_as_uint16", "1").expect("override");
-        assert!(ours < theirs, "the connection's setting is sent last");
+        assert!(
+            !pairs
+                .iter()
+                .any(|p| p.0 == "output_format_parquet_unsupported_types_as_binary"),
+            "not sent: older servers don't know it"
+        );
+        for (k, v) in [
+            ("readonly", "2"),
+            ("output_format_parquet_date_as_uint16", "0"),
+            ("output_format_parquet_datetime_as_uint32", "0"),
+            ("output_format_parquet_string_as_string", "1"),
+            ("output_format_parquet_use_custom_encoder", "1"),
+            ("precise_float_parsing", "1"),
+            ("max_threads", "2"),
+        ] {
+            assert!(pairs.iter().any(|p| p.0 == k && p.1 == v), "{k}={v}");
+        }
+    }
+
+    #[test]
+    fn queries_cant_set_owned_settings() {
+        let set = |q: &str| sets_owned_setting(q);
+        assert_eq!(
+            set("SELECT d FROM t SETTINGS Output_Format_Parquet_Date_As_UInt16 = 1").as_deref(),
+            Some("output_format_parquet_date_as_uint16")
+        );
+        assert_eq!(
+            set("SELECT 1 SETTINGS output_format_parquet_compression_method = 'lz4', output_format_parquet_use_custom_encoder=0").as_deref(),
+            Some("output_format_parquet_use_custom_encoder")
+        );
+        assert_eq!(
+            set("SELECT 1 SETTINGS PRECISE_FLOAT_PARSING = 0").as_deref(),
+            Some("precise_float_parsing")
+        );
+        assert_eq!(
+            set("SELECT 1 SETTINGS output_format_parquet_some_new_thing = 1").as_deref(),
+            Some("output_format_parquet_some_new_thing")
+        );
+        assert_eq!(
+            set(
+                "SELECT 1 SETTINGS output_format_parquet_compression_method = 'lz4', output_format_parquet_row_group_size = 10"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn table_names() {
+        assert_eq!(table_name("default.eod"), "`default`.`eod`");
+        assert_eq!(table_name("db.a.b"), "`db`.`a.b`");
+        assert_eq!(table_name("t`x"), "`t\\`x`");
     }
 
     #[test]
@@ -434,6 +630,12 @@ mod tests {
             "default_format",
             "database",
             "max_execution_time",
+            "output_format_parquet_date_as_uint16",
+            "Output_Format_Parquet_String_As_String",
+            "output_format_parquet_unsupported_types_as_binary",
+            "output_format_parquet_use_custom_encoder",
+            "output_format_parquet_fixed_string_as_fixed_byte_array",
+            "precise_float_parsing",
         ] {
             let e = ClickHouse::with_endpoint(
                 parse_dsn("clickhouse://h").expect("dsn"),

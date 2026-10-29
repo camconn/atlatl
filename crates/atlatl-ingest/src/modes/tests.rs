@@ -318,6 +318,77 @@ fn update_key_filters_and_max() {
         })
         .expect("lookback binds");
     assert_eq!(n, 2);
+    c.execute_batch(
+        "CREATE TEMP TABLE t AS SELECT * FROM (VALUES
+            (TIMESTAMPTZ '2025-05-01 11:59:59.700+00'),
+            (TIMESTAMPTZ '2025-05-01 11:59:59.800+00'),
+            (TIMESTAMPTZ '2025-05-01 12:00:00+00')) x(ts)",
+    )
+    .expect("t");
+    let f = update_key_filter(
+        "ts",
+        Some("2025-05-01 12:00:00+00"),
+        Some("TIMESTAMP WITH TIME ZONE"),
+        Some("0 hours 0 seconds 250000 microseconds"),
+        true,
+        false,
+    )
+    .expect("f");
+    assert_eq!(
+        f,
+        "\"ts\" >= (CAST('2025-05-01 12:00:00+00' AS TIMESTAMP WITH TIME ZONE) - INTERVAL '0 hours 0 seconds 250000 microseconds')"
+    );
+    let n: i64 = c
+        .query_row(&format!("SELECT count(*) FROM t WHERE {f}"), [], |r| {
+            r.get(0)
+        })
+        .expect("sub-second lookback binds");
+    assert_eq!(n, 2, "a 250ms lookback re-reads the late row 200ms back");
+}
+
+#[test]
+fn lookback_is_elapsed_time_across_dst() {
+    let c = Connection::open_in_memory().expect("db");
+    c.execute_batch(
+        "SET TimeZone = 'America/New_York';
+         CREATE TEMP TABLE t AS SELECT * FROM (VALUES
+            (1, TIMESTAMPTZ '2026-03-08 05:29:59+00'),
+            (2, TIMESTAMPTZ '2026-03-08 05:30:00+00'),
+            (3, TIMESTAMPTZ '2026-03-08 06:00:00+00')) x(id, ts)",
+    )
+    .expect("t");
+    let day = atlatl_core::config::types::interval_text(86_400_000_000);
+    let wm = "2026-03-09 01:30:00-04";
+    let secs: i64 = c
+        .query_row(
+            &format!(
+                "SELECT CAST(epoch(TIMESTAMPTZ '{wm}') - epoch(TIMESTAMPTZ '{wm}' - INTERVAL '{day}') AS BIGINT)"
+            ),
+            [],
+            |r| r.get(0),
+        )
+        .expect("diff");
+    assert_eq!(
+        secs, 86_400,
+        "1d back across spring-forward is 24 elapsed hours"
+    );
+    let f = update_key_filter(
+        "ts",
+        Some(wm),
+        Some("TIMESTAMP WITH TIME ZONE"),
+        Some(&day),
+        true,
+        false,
+    )
+    .expect("f");
+    let ids: Vec<i32> = c
+        .prepare(&format!("SELECT id FROM t WHERE {f} ORDER BY id"))
+        .expect("q")
+        .query_map([], |r| r.get(0))
+        .expect("rows")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(ids, [2, 3], "rows 23.5h and 24h back are re-read");
 }
 
 fn stamps(c: &Connection) -> Vec<(i32, i32)> {

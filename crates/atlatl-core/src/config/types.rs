@@ -8,6 +8,20 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// `us` microseconds as SQL interval text that DuckDB, Postgres (12 included) and Redshift all take,
+/// as exact elapsed time. Hours, seconds and microseconds all land in the interval's time part;
+/// `days`/`months` are calendar units in `timestamptz` arithmetic (a DST day is 23 or 25 hours).
+/// Each field stays within Postgres's 32-bit field parsing (a bare `86400000000 microseconds`
+/// overflows it).
+pub fn interval_text(us: u64) -> String {
+    let (hours, rem) = (us / 3_600_000_000, us % 3_600_000_000);
+    format!(
+        "{hours} hours {} seconds {} microseconds",
+        rem / 1_000_000,
+        rem % 1_000_000
+    )
+}
+
 /// `250ms`, `2s`, `5m`, `2h`, `3d`, or `0`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Dur(pub Duration);
@@ -359,6 +373,23 @@ impl JsonSchema for SecretValue {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn interval_text_keeps_fields_small() {
+        assert_eq!(
+            super::interval_text(250_000),
+            "0 hours 0 seconds 250000 microseconds"
+        );
+        assert_eq!(
+            super::interval_text(86_400_000_000 * 3 + 3_601_500_000),
+            "73 hours 1 seconds 500000 microseconds"
+        );
+        assert_eq!(
+            super::interval_text(u64::from(i32::MAX.unsigned_abs()) * 3_600_000_000),
+            "2147483647 hours 0 seconds 0 microseconds"
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -340,3 +340,117 @@ fn infer_roundtrips() {
     let e = evaluate(&c, &Staged::records("stg"), &back).expect("eval");
     assert_eq!(e.report.status, SchemaStatus::Ok, "{:?}", e.report);
 }
+
+/// Per input (JSON text for field `a`), whether it is a domain violation.
+fn domain_violations(field: &str, inputs: &[&str]) -> Vec<bool> {
+    let y = format!("schema:\n  fields:\n    a: {field}\n");
+    inputs
+        .iter()
+        .map(|i| {
+            let c = staged(&[&format!(r#"{{"a": {i}}}"#)]);
+            let r = eval(&c, &y).report;
+            assert_eq!(violation(&r, "a", ViolationKind::Type), None, "{i}: {r:?}");
+            violation(&r, "a", ViolationKind::Domain) == Some(1)
+        })
+        .collect()
+}
+
+#[test]
+fn integer_values_compare_exactly() {
+    let v = domain_violations(
+        "{type: integer, values: [9007199254740992]}",
+        &[
+            "9007199254740993",
+            r#""9007199254740993""#,
+            "9007199254740992",
+            r#""+9007199254740992""#,
+        ],
+    );
+    assert_eq!(v, [true, true, false, false]);
+
+    let v = domain_violations(
+        r#"{type: integer, values: ["170141183460469231731687303715884105727", "-170141183460469231731687303715884105728"]}"#,
+        &[
+            r#""170141183460469231731687303715884105727""#,
+            r#""170141183460469231731687303715884105726""#,
+            r#""170141183460469231731687303715884105728""#,
+            r#""-170141183460469231731687303715884105728""#,
+        ],
+    );
+    assert_eq!(v, [false, true, true, false]);
+
+    let v = domain_violations(
+        r#"{type: integer, values: [1, "2", 3.0, 1.5, "4.5"]}"#,
+        &["1", r#""2""#, "3", "4", r#""5""#],
+    );
+    assert_eq!(v, [false, false, false, true, true]);
+
+    let v = domain_violations("{type: integer, values: [1.5]}", &["1", "2"]);
+    assert_eq!(v, [true, true]);
+}
+
+#[test]
+fn decimal_values_compare_exactly() {
+    let v = domain_violations(
+        r#"{type: decimal, values: ["1.12345678901234567890"]}"#,
+        &[
+            r#""1.12345678901234567891""#,
+            r#""1.123456789012345678900""#,
+            r#""1.1234567890123456789""#,
+        ],
+    );
+    assert_eq!(v, [true, false, false]);
+
+    let v = domain_violations(
+        "{type: decimal, values: [1.5]}",
+        &[
+            r#""1.55""#,
+            "1.55",
+            r#""1.5000000001""#,
+            r#""1.45""#,
+            r#""1.50""#,
+            "1.5",
+            r#""0.15e1""#,
+            r#""+1.5""#,
+        ],
+    );
+    assert_eq!(v, [true, true, true, true, false, false, false, false]);
+
+    let v = domain_violations(
+        r#"{type: decimal, values: ["12345678901234567890123456", "1e-3", -2, "0"]}"#,
+        &[
+            r#""12345678901234567890123456.000""#,
+            r#""12345678901234567890123457""#,
+            r#""0.001""#,
+            r#""0.0011""#,
+            "-2",
+            r#""-2.0""#,
+            r#""-0.000""#,
+            r#""123456789012345678901234567890123456789""#,
+        ],
+    );
+    assert_eq!(v, [false, true, false, true, false, false, false, true]);
+}
+
+#[test]
+fn float_values_keep_double_semantics() {
+    let v = domain_violations(
+        "{type: float, values: [9007199254740992, 1.5]}",
+        &[r#""9007199254740993""#, "9007199254740992", "1.5", "1.55"],
+    );
+    assert_eq!(v, [false, false, false, true]);
+}
+
+#[test]
+fn decimal_text_parts() {
+    let p = |s: &str| decimal_parts(s).map(|(n, d, e)| decimal_text(n, &d, e));
+    assert_eq!(p("1.50").as_deref(), Some("1.5"));
+    assert_eq!(p("1e-3").as_deref(), Some("0.001"));
+    assert_eq!(p("-12.5E2").as_deref(), Some("-1250"));
+    assert_eq!(p(".05").as_deref(), Some("0.05"));
+    assert_eq!(p("-0.00").as_deref(), Some("0"));
+    assert_eq!(p("00120").as_deref(), Some("120"));
+    for bad in ["", ".", "1.2.3", "abc", "1e", "NaN", "inf", "1_0"] {
+        assert_eq!(decimal_parts(bad), None, "{bad}");
+    }
+}

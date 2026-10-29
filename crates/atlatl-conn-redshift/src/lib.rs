@@ -51,6 +51,9 @@ pub struct Options {
     pub sts_endpoint: Option<String>,
     /// Wire sessions (`max_concurrency`).
     pub max_sessions: usize,
+    /// A wire pool shared by every client on the connection, so `max_sessions` caps the run rather
+    /// than each client; one is built when unset.
+    pub wire: Option<Wire>,
     /// Wire export batching and stall detection.
     pub export: export::ExportOptions,
 }
@@ -73,6 +76,7 @@ impl Default for Options {
             statement_timeout: Duration::from_secs(24 * 3600),
             sts_endpoint: None,
             max_sessions: 4,
+            wire: None,
             export: export::ExportOptions::default(),
         }
     }
@@ -247,11 +251,14 @@ impl Redshift {
                 let w = conn.wire.as_deref().ok_or_else(|| {
                     AtlatlError::config("redshift: `wire` is required for access: wire")
                 })?;
-                Access::Wire(Wire::new(
-                    wire::connect_options(w)?,
-                    opts.max_sessions,
-                    opts.statement_timeout,
-                )?)
+                Access::Wire(match &opts.wire {
+                    Some(shared) => shared.clone(),
+                    None => Wire::new(
+                        wire::connect_options(w)?,
+                        opts.max_sessions,
+                        opts.statement_timeout,
+                    )?,
+                })
             }
         };
         let (unload, s3) = match conn.unload.as_deref() {

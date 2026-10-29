@@ -31,6 +31,8 @@ enum Short {
 
 pub const DEFAULT_PORT: u16 = 5439;
 
+/// Cheap to clone: clones share the pool.
+#[derive(Clone)]
 pub struct Wire {
     pool: Pool,
     statement_timeout: Duration,

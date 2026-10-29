@@ -299,8 +299,31 @@ the stream one atomic unit (unlike `for_each`, which makes an instance per item)
 ```
 
 - **Sources.** ClickHouse streams with `from.query` (`bind`).
-- **Listing.** Each `bind.<name>` runs `query` on `connection` (a lake, postgres or duckdb connection, as for `for_each.over`) when the member is extracted, so it sees what earlier replications in the run committed and what dbt wrote before the run. The SQL is never templated. Each row must have one column.
-- **Splicing.** The plan renders `{{ bind.<name> }}` as the marker `/*atlatl:bind:<name>*/` (so `atlatl plan` shows where lists go); the runner replaces it with the values as ClickHouse literals, comma-separated: numbers bare, strings single-quoted with `\` escapes, `NULL`, `true`/`false`. Plan checks reject a list `from.query` doesn't use and a `bind.<name>` it uses but doesn't define; a non-scalar value is `config` at run time.
-- **Batching.** One list may set `batch: n`: the query then runs once per `n` values, and every batch's result stages and commits together (one commit, so a full refresh still replaces the whole table). Other lists are spliced whole into every batch.
-- **Empty lists.** An empty list renders as `NULL`, so the query still runs once and returns its schema. `IN (NULL)` matches nothing, but `NOT IN (NULL)` matches every row, so write exclusions accordingly. The member warns `bind_empty`, and `on_empty` decides what a full refresh with no rows does to the target (default `mirror`: it empties it).
+- **Listing.** Each `bind.<name>` runs `query` on `connection` (a lake, postgres or duckdb connection, as for `for_each.over`) when the member is extracted, so it sees what earlier replications in the run committed and what dbt wrote before the run. The SQL is never templated.
+- **Fallback.** `fallback` (SQL, never templated) runs instead of `query` while the stream's target table doesn't exist yet, so `query` can read the target (each series from its last stored date, say) without failing on the first run.
+- **Splicing.** The plan renders `{{ bind.<name> }}` as the marker `/*atlatl:bind:<name>*/` (so `atlatl plan` shows where lists go); the runner replaces it with the rows as ClickHouse literals, comma-separated: numbers exactly as listed (integers up to 64 bits bare, wider ones as `toInt128('…')`-style casts, fractions quoted, since ClickHouse reads a bare fraction or wide integer as `Float64` and `1.1` would then miss a `Decimal(38,20)` 1.1; a quoted number converts exactly to the type it meets in `IN`, `values()` or a comparison), strings single-quoted with `\` escapes, `NULL`, `true`/`false`. A one-column row is its value; a row with several columns is a tuple in column order, `(123, '2024-01-01')`, for `values()`. Plan checks reject a list `from.query` doesn't use and a `bind.<name>` it uses but doesn't define; a non-scalar value, or a column name used twice (Postgres would keep only one of them), is `config` at run time.
+- **Batching.** One list may set `batch: n`: the query then runs once per `n` rows, and every batch's result stages and commits together (one commit, so a full refresh still replaces the whole table). Other lists are spliced whole into every batch. `concurrency: n` (default 1) runs up to `n` batches at once; the source connection's `max_concurrency` caps every query on it across the run (06 §11).
+- **Empty lists.** An empty list renders as `NULL`, so the query still runs once and returns its schema. `IN (NULL)` matches nothing, but `NOT IN (NULL)` matches every row, so write exclusions accordingly; `values()` rejects it, so a stream joining a tuple list fails rather than pulls nothing. The member warns `bind_empty`, and `on_empty` decides what a full refresh with no rows does to the target (default `mirror`: it empties it).
+
+Each series from its own start, the first run from 2000:
+
+```yaml
+  mode: incremental
+  bind:
+    windows:
+      query: >
+        SELECT s.series_id, coalesce(max(b.date) - 7, DATE '2000-01-01') AS since
+        FROM ag.scoped_series s LEFT JOIN br.benchmark_eod b USING (series_id) GROUP BY 1
+      fallback: "SELECT series_id, DATE '2000-01-01' AS since FROM ag.scoped_series"
+      connection: warehouse
+      batch: 500
+      concurrency: 8
+  from:
+    query: >
+      SELECT e.series_id AS series_id, toDate(e.timestamp) AS date, argMax(e.close, e.timestamp) AS close
+      FROM default.aggregate_eod e
+      JOIN values('series_id Int64, since Date', {{ bind.windows }}) w ON e.series_id = w.series_id
+      WHERE toDate(e.timestamp) >= w.since
+      GROUP BY series_id, date
+```
 

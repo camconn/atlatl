@@ -207,7 +207,7 @@ replications:
 | `members` | `from.tables` | Per-member overrides, keyed by member name or glob: `{"appdb.audit_*": {primary_key: [ts, seq]}}`. An exact name wins over a glob, then globs in the order written. A member's `primary_key` here wins over the stream's and over the source's own |
 | `update_key` | incremental | Watermark column: a string, or `{column, lookback: "2h" \| 0, inclusive: true, nulls: exclude}` ([04 §4.3](04-ingest.md#43-incremental-with-an-update_key-watermark)) |
 | `window` (alias `where`) | incremental | Source filter (SQL, templated), e.g. the warehouse's hourly windows |
-| `bind` | clickhouse `from.query` | Lists spliced into `from.query` as `{{ bind.<name> }}`: `{<name>: {query, connection, batch}}`, listed when the member is extracted ([04 §12](04-ingest.md#12-bind-lists)) |
+| `bind` | clickhouse `from.query` | Lists spliced into `from.query` as `{{ bind.<name> }}`: `{<name>: {query, fallback, connection, batch, concurrency}}`, listed when the member is extracted ([04 §12](04-ingest.md#12-bind-lists)) |
 | `chunk` | all | `{by: column \| files, size, column}` ([04 §7](04-ingest.md#7-chunking)) |
 | `columns` | all | per-column settings (below) |
 | `deletes` | cdc | `{mode: soft \| hard \| ignore, column, value, restore}`; the default is soft ([08 §6.0](08-cdc.md#60-delete-modes)). For postgres → lake the default is `hard`, soft deletes set `_atlatl_op = 'delete'`, and `column`/`value` don't apply |

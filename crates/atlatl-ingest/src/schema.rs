@@ -634,7 +634,20 @@ fn domain_sql(kind: LogicalType, vals: &[Value], num: &str, jt: &str, tx: &str) 
     if vals.is_empty() {
         return "FALSE".into();
     }
-    if is_numeric(kind) {
+    if kind == LogicalType::Integer {
+        let list = vals
+            .iter()
+            .filter_map(|v| integer_literal(v))
+            .map(|i| format!("'{i}'::HUGEINT"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if list.is_empty() {
+            return "FALSE".into();
+        }
+        format!("TRY_CAST({num} AS HUGEINT) IN ({list})")
+    } else if kind == LogicalType::Decimal {
+        decimal_domain_sql(&vals, num)
+    } else if kind == LogicalType::Float {
         let list = vals
             .iter()
             .filter_map(|v| number_literal(v))
@@ -660,6 +673,105 @@ fn domain_sql(kind: LogicalType, vals: &[Value], num: &str, jt: &str, tx: &str) 
             .join(", ");
         format!("{tx} IN ({list})")
     }
+}
+
+fn integer_literal(v: &Value) -> Option<i128> {
+    match v {
+        Value::Number(n) => n
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| n.as_u64().map(i128::from))
+            .or_else(|| {
+                n.as_f64()
+                    .filter(|f| f.fract() == 0.0 && f.abs() < 2f64.powi(127))
+                    .map(|f| f as i128)
+            }),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Exact decimal text as `(negative, digits, exp)`, value = ±digits × 10^exp, digits without
+/// leading or trailing zeros (`"0"` for zero).
+fn decimal_parts(s: &str) -> Option<(bool, String, i64)> {
+    let s = s.trim();
+    let (neg, s) = match s.as_bytes().first()? {
+        b'-' => (true, &s[1..]),
+        b'+' => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let (mant, exp) = match s.find(['e', 'E']) {
+        Some(i) => (&s[..i], s[i + 1..].parse::<i64>().ok()?),
+        None => (s, 0),
+    };
+    let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
+    if (int.is_empty() && frac.is_empty())
+        || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let all = format!("{int}{frac}");
+    let lead = all.trim_start_matches('0');
+    let digits = lead.trim_end_matches('0');
+    if digits.is_empty() {
+        return Some((false, "0".into(), 0));
+    }
+    let exp = exp
+        .checked_sub(i64::try_from(frac.len()).ok()?)?
+        .checked_add(i64::try_from(lead.len() - digits.len()).ok()?)?;
+    Some((neg, digits.to_owned(), exp))
+}
+
+fn decimal_text(neg: bool, digits: &str, exp: i64) -> String {
+    let sign = if neg { "-" } else { "" };
+    let body = if exp >= 0 {
+        format!("{digits}{}", "0".repeat(exp as usize))
+    } else {
+        let scale = exp.unsigned_abs() as usize;
+        if digits.len() > scale {
+            let (i, f) = digits.split_at(digits.len() - scale);
+            format!("{i}.{f}")
+        } else {
+            format!("0.{}{digits}", "0".repeat(scale - digits.len()))
+        }
+    };
+    format!("{sign}{body}")
+}
+
+/// Exact membership at the widest allowed scale `s`; the input must also carry no digits past
+/// `s`, checked against a cast at the widest scale the allowed integer digits leave room for.
+fn decimal_domain_sql(vals: &[&Value], num: &str) -> String {
+    let parts: Vec<(bool, String, i64)> = vals
+        .iter()
+        .filter_map(|v| match v {
+            Value::Number(n) => decimal_parts(&n.to_string()),
+            Value::String(s) => decimal_parts(s),
+            _ => None,
+        })
+        .collect();
+    let scale = |exp: i64| exp.saturating_neg().max(0);
+    let int_digits = |d: &str, exp: i64| (d.len() as i64).saturating_add(exp).max(0);
+    let Some(s) = parts.iter().map(|(_, _, e)| scale(*e)).max() else {
+        return "FALSE".into();
+    };
+    let s = s.min(37);
+    let kept: Vec<_> = parts
+        .iter()
+        .filter(|(_, d, e)| scale(*e) <= s && int_digits(d, *e) <= 38 - s)
+        .collect();
+    let Some(ip) = kept.iter().map(|(_, d, e)| int_digits(d, *e)).max() else {
+        return "FALSE".into();
+    };
+    let s2 = 38 - ip.max(1);
+    let list = kept
+        .iter()
+        .map(|(n, d, e)| format!("'{}'::DECIMAL(38,{s})", decimal_text(*n, d, *e)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "(TRY_CAST({num} AS DECIMAL(38,{s})) IN ({list}) \
+         AND TRY_CAST(TRY_CAST({num} AS DECIMAL(38,{s})) AS DECIMAL(38,{s2})) = TRY_CAST({num} AS DECIMAL(38,{s2})))"
+    )
 }
 
 /// Fails early, as a config error, on a strftime format DuckDB rejects.

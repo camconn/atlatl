@@ -209,16 +209,10 @@ impl Fold {
     }
 }
 
-/// Numbers numerically (exactly for integers), everything else by its text.
+/// Numbers exactly by value, everything else by its text.
 pub fn cmp_json(a: &JValue, b: &JValue) -> Ordering {
     match (a, b) {
-        (JValue::Number(x), JValue::Number(y)) => match (x.as_i128(), y.as_i128()) {
-            (Some(i), Some(j)) => i.cmp(&j),
-            _ => x
-                .as_f64()
-                .partial_cmp(&y.as_f64())
-                .unwrap_or(Ordering::Equal),
-        },
+        (JValue::Number(x), JValue::Number(y)) => crate::json::cmp_numbers(x.as_str(), y.as_str()),
         (JValue::String(x), JValue::String(y)) => x.cmp(y),
         _ => a.to_string().cmp(&b.to_string()),
     }

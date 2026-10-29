@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use atlatl_conn_clickhouse::{ClickHouse, Endpoint, Options};
+use atlatl_conn_clickhouse::{ClickHouse, Endpoint, Options, types};
 use atlatl_core::ErrorClass;
 use atlatl_core::retry::RetryPolicy;
 use tokio_util::sync::CancellationToken;
@@ -181,4 +181,229 @@ async fn an_unreachable_server_is_transient() {
         .await
         .expect_err("refused");
     assert_eq!(e.class, ErrorClass::Transient, "{e:?}");
+}
+
+/// What each type lands as through Parquet, before `types::check`: what it lets through must land
+/// as its DuckDB counterpart, and the `update_key` watermark is rendered from these.
+#[tokio::test]
+async fn types_land_as() {
+    let db = atlatl_testkit::clickhouse().fresh_db().expect("db");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t.parquet");
+    let cases = [
+        ("toInt8(-1)", "TINYINT"),
+        ("toInt16(-1)", "SMALLINT"),
+        ("toInt32(-1)", "INTEGER"),
+        ("toInt64(-1)", "BIGINT"),
+        ("toInt128(-1)", "BLOB"),
+        ("toInt256(-1)", "BLOB"),
+        ("toUInt8(1)", "UTINYINT"),
+        ("toUInt16(1)", "USMALLINT"),
+        ("toUInt32(1)", "UINTEGER"),
+        ("toUInt64(1)", "UBIGINT"),
+        ("toUInt128(1)", "BLOB"),
+        ("toUInt256(1)", "BLOB"),
+        ("toFloat32(1.5)", "FLOAT"),
+        ("toFloat64(1.5)", "DOUBLE"),
+        ("toDecimal32(1.5, 2)", "DECIMAL(9,2)"),
+        ("toDecimal64(1.5, 4)", "DECIMAL(18,4)"),
+        ("toDecimal128(1.5, 10)", "DECIMAL(38,10)"),
+        ("toDecimal256(1.5, 20)", "DOUBLE"),
+        ("true", "BOOLEAN"),
+        ("toDate('2026-10-01')", "DATE"),
+        ("toDate32('1900-10-01')", "DATE"),
+        (
+            "toDateTime('2026-10-01 20:00:00')",
+            "TIMESTAMP WITH TIME ZONE",
+        ),
+        (
+            "toDateTime64('2026-10-01 20:00:00.123456789', 9, 'UTC')",
+            "TIMESTAMP WITH TIME ZONE",
+        ),
+        ("'x'", "VARCHAR"),
+        ("toLowCardinality('x')", "VARCHAR"),
+        ("toUUID('00000000-0000-0000-0000-000000000001')", "UUID"),
+        ("CAST('{\"a\": 1}' AS JSON)", "JSON"),
+        ("[toInt64(1), 2]", "BIGINT[]"),
+        ("map('k', toInt64(1))", "MAP(VARCHAR, BIGINT)"),
+        (
+            "CAST((1, 'a') AS Tuple(x UInt8, y String))",
+            "STRUCT(x UTINYINT, y VARCHAR)",
+        ),
+        (
+            "tuple(toInt8(1), 'a')",
+            "STRUCT(\"1\" TINYINT, \"2\" VARCHAR)",
+        ),
+    ];
+    let sel: Vec<String> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, (e, _))| format!("{e} AS c{i}"))
+        .collect();
+    client(&db, None)
+        .query_to_file(
+            &format!("SELECT {}", sel.join(", ")),
+            &path,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("query");
+    let cols = read_types(&path);
+    let got: Vec<(&str, &str)> = cases
+        .iter()
+        .zip(&cols)
+        .map(|((e, _), t)| (*e, t.as_str()))
+        .collect();
+    let want: Vec<(&str, &str)> = cases.to_vec();
+    assert_eq!(got, want);
+    // No Parquet form at all, so never a staged column.
+    for t in [
+        "toBFloat16(1.5)",
+        "CAST('20:00:00' AS Time)",
+        "CAST('20:00:00' AS Time64(3))",
+    ] {
+        let e = client(&db, None)
+            .query_to_file(
+                &format!("SELECT {t} AS x SETTINGS enable_time_time64_type = 1"),
+                &path,
+                &CancellationToken::new(),
+            )
+            .await
+            .expect_err(t);
+        assert!(e.message.contains("Parquet"), "{t}: {}", e.message);
+    }
+}
+
+fn read_types(path: &std::path::Path) -> Vec<String> {
+    let c = duckdb::Connection::open_in_memory().expect("duckdb");
+    c.prepare(&format!(
+        "SELECT column_type FROM (DESCRIBE SELECT * FROM read_parquet('{}'))",
+        path.display()
+    ))
+    .expect("describe")
+    .query_map([], |r| r.get(0))
+    .expect("describe")
+    .collect::<Result<_, _>>()
+    .expect("describe")
+}
+
+#[tokio::test]
+async fn describe_lists_columns_without_running() {
+    let db = seeded();
+    let cols = client(&db, None)
+        .describe(
+            "SELECT series_id, toInt128(n) AS big FROM eod WHERE throwIf(1) -- trailing\n;",
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("describe")
+        .columns;
+    assert_eq!(
+        cols,
+        [
+            ("series_id".to_owned(), "UInt32".to_owned()),
+            ("big".to_owned(), "Nullable(Int128)".to_owned())
+        ]
+    );
+}
+
+/// The type gate on `DESCRIBE`'s own spelling of each type.
+#[tokio::test]
+async fn the_type_gate_reads_describe() {
+    let db = atlatl_testkit::clickhouse().fresh_db().expect("db");
+    let c = client(&db, None);
+    let landed = [
+        "toInt64(1)",
+        "toInt128(1)",
+        "toNullable(toUInt128(1))",
+        "toDecimal256('1.5', 2)",
+        "toDateTime64('2026-10-01 20:00:00.123456', 6, 'UTC')",
+        "toDate32('1900-01-01')",
+        "toUUID('00000000-0000-0000-0000-000000000001')",
+        "toLowCardinality('x')",
+        "map('k', [1, 2])",
+        "CAST((1, 'a') AS Tuple(IPv4 UInt8, `Enum8` String))",
+        "CAST('{\"a\": 1}' AS JSON)",
+    ];
+    let refused = [
+        ("toInt256(1)", "no 256-bit integer"),
+        ("toUInt256(1)", "no 256-bit integer"),
+        (
+            "toDateTime64('2026-10-01 20:00:00.1234567', 7, 'UTC')",
+            "to the microsecond",
+        ),
+        ("toIPv4('1.2.3.4')", "no IP address type"),
+        ("toIPv6('::1')", "no IP address type"),
+        ("CAST('a' AS Enum8('a' = 1, 'b,)' = 2))", "no enum type"),
+        ("toFixedString('abc', 3)", "no fixed-length string"),
+        ("[toInt128(1)]", "inside an Array"),
+        (
+            "CAST((1, '::1') AS Tuple(a UInt8, b IPv6))",
+            "no IP address type",
+        ),
+        ("uniqState(toUInt64(1))", "doesn't land this type"),
+        ("(1.0, 2.0)::Point", "doesn't land this type"),
+        ("NULL", "an untyped `NULL`"),
+        ("[]", "empty array"),
+    ];
+    for e in landed {
+        let cols = c
+            .describe(&format!("SELECT {e} AS x"), &CancellationToken::new())
+            .await
+            .expect(e)
+            .columns;
+        types::check(&cols).unwrap_or_else(|err| panic!("{e}: {}", err.message));
+    }
+    for (e, want) in refused {
+        let cols = c
+            .describe(&format!("SELECT {e} AS x"), &CancellationToken::new())
+            .await
+            .expect(e)
+            .columns;
+        let err = types::check(&cols).expect_err(e);
+        assert!(err.message.contains(want), "{e}: {}", err.message);
+    }
+}
+
+/// Float32 values whose shortest text the default parser rounds to a neighbour: the watermark
+/// `CAST('…' AS Float32)` must land on the stored value.
+#[tokio::test]
+async fn float32_text_parses_to_the_same_value() {
+    let db = atlatl_testkit::clickhouse().fresh_db().expect("db");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t.parquet");
+    let cases = [
+        (4151590082u32, "-4.9537217e+33"),
+        (5056982, "7.086341e-39"),
+        (3868883, "5.42146e-39"),
+        (5084783, "7.125299e-39"),
+        (106025646, "3.9463314e-35"),
+    ];
+    let exprs: Vec<String> = cases
+        .iter()
+        .map(|(bits, text)| {
+            assert_eq!(
+                f32::from_bits(*bits).to_string().parse::<f32>().ok(),
+                text.parse::<f32>().ok()
+            );
+            format!("reinterpretAsFloat32(toUInt32({bits})) = CAST('{text}' AS Float32)")
+        })
+        .collect();
+    client(&db, None)
+        .query_to_file(
+            &format!("SELECT arrayAll(x -> x, [{}]) AS ok", exprs.join(", ")),
+            &path,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("query");
+    let c = duckdb::Connection::open_in_memory().expect("duckdb");
+    let ok: bool = c
+        .query_row(
+            &format!("SELECT ok::BOOLEAN FROM read_parquet('{}')", path.display()),
+            [],
+            |r| r.get(0),
+        )
+        .expect("read");
+    assert!(ok);
 }

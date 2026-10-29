@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use atlatl_conn_clickhouse::bind::Lit;
 use atlatl_conn_redshift::{Redshift, UnloadRequest, Unloaded};
 use atlatl_core::config::connection::Connection as ConnConfig;
 use atlatl_core::config::load::Stream;
@@ -375,6 +376,93 @@ async fn prepare(
     let is_rest = matches!(source, Src::Rest);
     let mut rs_cols = None;
     let mut rest: Option<crate::rest::RestStaged> = None;
+    let state_member = if s.config.from.as_ref().is_some_and(|f| f.tables.is_some()) {
+        m.name.clone()
+    } else {
+        String::new()
+    };
+    let config_hash = sp.config_hash.clone();
+    let mut filters: Vec<String> = m.window.iter().cloned().collect();
+    let mut pg_cursor: Option<(usize, atlatl_conn_postgres::source::Cursor)> = None;
+    let mut state_before = None;
+    let mut ch_mark = None;
+    let update_key = c.update_key.as_ref().map(|u| u.value.clone());
+    if let Some(uk) = &update_key
+        && kind == Kind::Incremental
+        && !is_rest
+    {
+        let st = rt.state()?.clone();
+        let (id, mem, h) = (
+            sp.state_id().to_owned(),
+            state_member.clone(),
+            config_hash.clone(),
+        );
+        let row = session
+            .run(move |conn| st.get_checked(conn, &id, &mem, StateKind::UpdateKey, &h))
+            .await?;
+        let stored = row.as_ref().and_then(|r| {
+            r.value
+                .get("value")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        });
+        let stored_ty = row.as_ref().and_then(|r| {
+            r.value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        });
+        state_before = row.map(|r| r.value);
+        let lookback_us = lookback_us(uk.lookback);
+        let lookback = lookback_us.map(atlatl_core::config::types::interval_text);
+        let include_nulls = uk.nulls == Some(atlatl_core::config::model::Nulls::Include);
+        let f = if is_rs {
+            atlatl_conn_redshift::catalog::update_key_filter(
+                &uk.column,
+                stored.as_deref(),
+                stored_ty.as_deref(),
+                lookback.as_deref(),
+                uk.inclusive.unwrap_or(true),
+                include_nulls,
+            )
+        } else {
+            update_key_filter(
+                &uk.column,
+                stored.as_deref(),
+                stored_ty.as_deref(),
+                lookback.as_deref(),
+                uk.inclusive.unwrap_or(true),
+                include_nulls,
+            )
+        };
+        if let Some(f) = f {
+            if is_pg {
+                let cur = atlatl_conn_postgres::source::Cursor {
+                    column: uk.column.clone(),
+                    stored: stored.clone(),
+                    lookback_us,
+                    inclusive: uk.inclusive.unwrap_or(true),
+                    include_nulls,
+                };
+                pg_cursor = Some((filters.len(), cur));
+            }
+            filters.push(f);
+        }
+        if matches!(source, Src::Clickhouse(_)) {
+            let value = match stored.as_deref() {
+                Some(v) => {
+                    Some(clickhouse_watermark(session, v, stored_ty.as_deref(), lookback_us).await?)
+                }
+                None => None,
+            };
+            ch_mark = Some(atlatl_conn_clickhouse::incremental::Watermark {
+                column: uk.column.clone(),
+                value,
+                inclusive: uk.inclusive.unwrap_or(true),
+                include_nulls,
+            });
+        }
+    }
     let stg = staging::staging_name(&rt.run_id, seq.0, seq.1);
     let src = match (source, &m.table, &m.query) {
         (Src::Rest, ..) => {
@@ -409,7 +497,35 @@ async fn prepare(
         // Read once the cursor is known (it may be evaluated in Postgres).
         (Src::Postgres(_), ..) => String::new(),
         (Src::Clickhouse(ch), ..) => {
-            let (rel, dir) = clickhouse_member(rt, session, rep, sp, s, m, seq, ch, cancel).await?;
+            let first_run = if s
+                .config
+                .bind
+                .iter()
+                .flatten()
+                .any(|(_, b)| b.fallback.is_some())
+            {
+                let (a, sc, t) = (tgt_alias.to_owned(), t_schema.clone(), t_table.clone());
+                session
+                    .run(move |c| staging::table_columns(c, &a, &sc, &t))
+                    .await?
+                    .is_none()
+            } else {
+                false
+            };
+            let (rel, dir) = clickhouse_member(
+                rt,
+                session,
+                rep,
+                sp,
+                s,
+                m,
+                seq,
+                ch,
+                ch_mark.as_ref(),
+                first_run,
+                cancel,
+            )
+            .await?;
             scratch = Some(dir);
             rel
         }
@@ -443,83 +559,6 @@ async fn prepare(
         }
     };
 
-    let state_member = if s.config.from.as_ref().is_some_and(|f| f.tables.is_some()) {
-        m.name.clone()
-    } else {
-        String::new()
-    };
-    let config_hash = sp.config_hash.clone();
-    let mut filters: Vec<String> = m.window.iter().cloned().collect();
-    let mut pg_cursor: Option<(usize, atlatl_conn_postgres::source::Cursor)> = None;
-    let mut state_before = None;
-    let update_key = c.update_key.as_ref().map(|u| u.value.clone());
-    if let Some(uk) = &update_key
-        && kind == Kind::Incremental
-        && !is_rest
-    {
-        let st = rt.state()?.clone();
-        let (id, mem, h) = (
-            sp.state_id().to_owned(),
-            state_member.clone(),
-            config_hash.clone(),
-        );
-        let row = session
-            .run(move |conn| st.get_checked(conn, &id, &mem, StateKind::UpdateKey, &h))
-            .await?;
-        let stored = row.as_ref().and_then(|r| {
-            r.value
-                .get("value")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-        });
-        let stored_ty = row.as_ref().and_then(|r| {
-            r.value
-                .get("type")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-        });
-        state_before = row.map(|r| r.value);
-        let lookback = uk
-            .lookback
-            .filter(|d| !d.0.is_zero())
-            .map(|d| format!("{} seconds", d.0.as_secs()));
-        let include_nulls = uk.nulls == Some(atlatl_core::config::model::Nulls::Include);
-        let f = if is_rs {
-            atlatl_conn_redshift::catalog::update_key_filter(
-                &uk.column,
-                stored.as_deref(),
-                stored_ty.as_deref(),
-                lookback.as_deref(),
-                uk.inclusive.unwrap_or(true),
-                include_nulls,
-            )
-        } else {
-            update_key_filter(
-                &uk.column,
-                stored.as_deref(),
-                stored_ty.as_deref(),
-                lookback.as_deref(),
-                uk.inclusive.unwrap_or(true),
-                include_nulls,
-            )
-        };
-        if let Some(f) = f {
-            if is_pg {
-                let cur = atlatl_conn_postgres::source::Cursor {
-                    column: uk.column.clone(),
-                    stored: stored.clone(),
-                    lookback_s: uk
-                        .lookback
-                        .filter(|d| !d.0.is_zero())
-                        .map(|d| d.0.as_secs()),
-                    inclusive: uk.inclusive.unwrap_or(true),
-                    include_nulls,
-                };
-                pg_cursor = Some((filters.len(), cur));
-            }
-            filters.push(f);
-        }
-    }
     let src = match source {
         Src::Postgres(pg) => {
             let r = pg
@@ -1172,13 +1211,24 @@ async fn clickhouse_member(
     m: &MemberPlan,
     seq: (usize, usize),
     ch: &atlatl_conn_clickhouse::ClickHouse,
+    mark: Option<&atlatl_conn_clickhouse::incremental::Watermark>,
+    first_run: bool,
     cancel: &CancellationToken,
 ) -> Result<(String, std::path::PathBuf)> {
     use atlatl_conn_clickhouse::bind::{Bound, render};
-    let sql = match (&m.query, &m.table) {
-        (Some(q), _) => q.clone(),
-        (None, Some(_)) => format!("SELECT * FROM {}", clickhouse_table(&m.name)),
-        (None, None) => {
+    let sql = match (&m.query, &m.table, mark) {
+        (Some(q), _, Some(w)) => w.render(q),
+        (Some(q), _, None) => q.clone(),
+        (None, Some(_), Some(w)) => format!(
+            "SELECT * FROM {} WHERE {}",
+            atlatl_conn_clickhouse::table_name(&m.name),
+            w.condition()
+        ),
+        (None, Some(_), None) => format!(
+            "SELECT * FROM {}",
+            atlatl_conn_clickhouse::table_name(&m.name)
+        ),
+        (None, None, _) => {
             return Err(AtlatlError::config(format!(
                 "stream `{}`: clickhouse sources read `from.table` or `from.query`",
                 sp.id
@@ -1187,22 +1237,15 @@ async fn clickhouse_member(
     };
     let mut whole = Vec::new();
     let mut batched = None;
+    let mut concurrency = 1;
     for (name, b) in s.config.bind.iter().flatten() {
-        let rows =
-            crate::rest::query_items(rt, session, &b.query, &b.connection, &[], None).await?;
-        let items = rows
-            .iter()
-            .map(|r| match r.to_serde() {
-                serde_json::Value::Object(o) if o.len() == 1 => {
-                    Ok(o.into_iter().next().map(|(_, v)| v).unwrap_or_default())
-                }
-                v @ serde_json::Value::Object(_) => Err(AtlatlError::config(format!(
-                    "stream `{}`: `bind.{name}.query` must return one column, got {v}",
-                    sp.id
-                ))),
-                scalar => Ok(scalar),
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let query = match &b.fallback {
+            Some(f) if first_run => f,
+            _ => &b.query,
+        };
+        let texts = crate::rest::query_rows(rt, session, query, &b.connection).await?;
+        let items = bind_rows(&texts)
+            .map_err(|e| AtlatlError::config(format!("stream `{}`: `bind.{name}`: {e}", sp.id)))?;
         if items.is_empty() {
             rt.report.member(&rep.name, &sp.id, &m.name, |r| {
                 r.warn(
@@ -1215,18 +1258,40 @@ async fn clickhouse_member(
         }
         let bound = Bound {
             name: name.clone(),
-            items,
+            rows: items,
         };
         // Plan checks allow one batched list, with a batch of at least 1.
         match b
             .batch
             .and_then(|n| std::num::NonZeroUsize::new(n as usize))
         {
-            Some(n) if batched.is_none() => batched = Some((bound, n)),
+            Some(n) if batched.is_none() => {
+                concurrency = b.concurrency.map_or(1, |c| c.max(1) as usize);
+                batched = Some((bound, n));
+            }
             _ => whole.push(bound),
         }
     }
-    let queries = render(&sql, &whole, batched.as_ref().map(|(b, n)| (b, *n)))?;
+    if let Some(k) = atlatl_conn_clickhouse::sets_owned_setting(&sql) {
+        return Err(AtlatlError::config(format!(
+            "stream `{}`: `from.query` sets `{k}`, which atlatl owns (it decides what types land and how watermarks compare); only Parquet layout settings (compression, row groups, pages, bloom filters) may be set, so convert columns in the select instead",
+            sp.id
+        )));
+    }
+    let queries = render(&sql, &whole, batched.as_ref().map(|(b, n)| (b, *n)));
+    // Every batch has the first one's columns.
+    let described = ch.describe(&queries[0], cancel).await?;
+    rt.report.member(&rep.name, &sp.id, &m.name, |r| {
+        for a in &described.retries {
+            r.record_retry(a);
+        }
+    });
+    let wide = atlatl_conn_clickhouse::types::check(&described.columns)
+        .map_err(|e| AtlatlError::config(format!("stream `{}`: {}", sp.id, e.message)))?;
+    let queries: Vec<String> = queries
+        .iter()
+        .map(|q| atlatl_conn_clickhouse::types::stringify(q, &wide))
+        .collect();
     static UNIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = UNIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = rt
@@ -1235,10 +1300,24 @@ async fn clickhouse_member(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| AtlatlError::internal(format!("create {}: {e}", dir.display())))?;
-    let mut files = Vec::with_capacity(queries.len());
-    for (i, q) in queries.iter().enumerate() {
-        let path = dir.join(format!("{i:05}.parquet"));
-        let got = ch.query_to_file(q, &path, cancel).await?;
+    use futures::{StreamExt, TryStreamExt};
+    let fetches: Vec<_> = queries
+        .iter()
+        .enumerate()
+        .map(|(i, q)| {
+            let path = dir.join(format!("{i:05}.parquet"));
+            async move {
+                let got = ch.query_to_file(q, &path, cancel).await?;
+                Ok::<_, AtlatlError>((path, got))
+            }
+        })
+        .collect();
+    let fetched: Vec<_> = futures::stream::iter(fetches)
+        .buffered(concurrency)
+        .try_collect()
+        .await?;
+    let mut files = Vec::with_capacity(fetched.len());
+    for (path, got) in fetched {
         rt.report.member(&rep.name, &sp.id, &m.name, |r| {
             r.bytes.read += got.bytes;
             for a in &got.retries {
@@ -1248,21 +1327,196 @@ async fn clickhouse_member(
         files.push(atlatl_ingest::sql::literal(&path.display().to_string()));
     }
     tracing::info!(stream = %sp.id, queries = queries.len(), "clickhouse member fetched");
-    Ok((format!("read_parquet([{}])", files.join(", ")), dir))
+    let rel = format!("read_parquet([{}])", files.join(", "));
+    Ok((atlatl_conn_clickhouse::types::cast_back(&rel, &wide), dir))
 }
 
-/// `database.table` as a quoted ClickHouse name. Only the first dot separates (ClickHouse names
-/// have two levels), so a table name may contain dots.
-fn clickhouse_table(name: &str) -> String {
-    let quote = |p: &str| format!("`{}`", p.replace('\\', "\\\\").replace('`', "\\`"));
-    match name.split_once('.') {
-        Some((db, t)) => format!("{}.{}", quote(db), quote(t)),
-        None => quote(name),
+/// A bind query's rows (JSON objects) as values in column order. Numbers keep their text, so wide
+/// integers and decimals stay exact; a column name used twice is refused, since an object keeps
+/// only one of them and the row would quietly lose a column.
+fn bind_rows(texts: &[String]) -> std::result::Result<Vec<Vec<Lit>>, String> {
+    use atlatl_http::json::JValue;
+    if let Some(first) = texts.first() {
+        let names = json_object_keys(first).map_err(|e| format!("row: {e}"))?;
+        let mut seen = std::collections::HashSet::new();
+        if let Some(d) = names.iter().find(|n| !seen.insert(n.as_str())) {
+            return Err(format!(
+                "the query returns two columns named `{d}`; alias one of them"
+            ));
+        }
+    }
+    texts
+        .iter()
+        .map(|t| {
+            let v = atlatl_http::json::parse_str(t).map_err(|e| format!("row: {e}"))?;
+            let vals: Vec<JValue> = match v {
+                JValue::Object(m) => m.into_iter().map(|(_, v)| v).collect(),
+                other => vec![other],
+            };
+            vals.into_iter()
+                .map(|v| match v {
+                    JValue::Null => Ok(Lit::Null),
+                    JValue::Bool(b) => Ok(Lit::Bool(b)),
+                    JValue::Number(n) => Ok(Lit::Number(n.as_str().to_owned())),
+                    JValue::String(s) => Ok(Lit::String(s)),
+                    v @ (JValue::Array(_) | JValue::Object(_)) => {
+                        Err(format!("a bind value must be a scalar, got {v}"))
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// A JSON object's keys in order, repeats included.
+fn json_object_keys(text: &str) -> std::result::Result<Vec<String>, serde_json::Error> {
+    use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
+    struct Keys;
+    impl<'de> Visitor<'de> for Keys {
+        type Value = Vec<String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(
+            self,
+            mut a: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let mut keys = Vec::new();
+            while let Some(k) = a.next_key::<String>()? {
+                a.next_value::<IgnoredAny>()?;
+                keys.push(k);
+            }
+            Ok(keys)
+        }
+    }
+    serde_json::Deserializer::from_str(text).deserialize_map(Keys)
+}
+
+/// A nonzero `update_key.lookback` in whole microseconds.
+fn lookback_us(lookback: Option<atlatl_core::config::types::Dur>) -> Option<u64> {
+    lookback
+        .map(|d| u64::try_from(d.0.as_micros()).unwrap_or(u64::MAX))
+        .filter(|&n| n > 0)
+}
+
+/// The stored watermark less `lookback`, as a ClickHouse literal: numbers and booleans bare (wide
+/// integers, decimals and `Float32` cast), timestamps a UTC `DateTime64(6)`, dates and strings
+/// quoted.
+async fn clickhouse_watermark(
+    session: &mut Session,
+    value: &str,
+    ty: Option<&str>,
+    lookback_us: Option<u64>,
+) -> Result<String> {
+    let (sql, lit) = clickhouse_watermark_sql(value, ty, lookback_us)?;
+    let v = session
+        .run(move |c| {
+            c.query_row(&sql, [], |r| r.get::<_, String>(0))
+                .map_err(atlatl_ingest::sql::db)
+        })
+        .await?;
+    Ok(lit.render(v))
+}
+
+/// How a watermark's text becomes a ClickHouse literal.
+#[derive(Debug, PartialEq)]
+enum ChLit {
+    Bare,
+    Quoted,
+    /// ClickHouse parses integers past 64 bits and decimal and float literals as `Float64`, so
+    /// these go in as a typed cast of the text.
+    Cast(String),
+    /// A UTC instant: a bare string would be read in the column's (or server's) time zone.
+    Utc,
+}
+
+impl ChLit {
+    fn render(&self, v: String) -> String {
+        let quoted = atlatl_conn_clickhouse::bind::quoted;
+        match self {
+            ChLit::Bare => v,
+            ChLit::Quoted => quoted(&v),
+            ChLit::Cast(t) => format!("CAST({} AS {t})", quoted(&v)),
+            ChLit::Utc => format!("toDateTime64({}, 6, 'UTC')", quoted(&v)),
+        }
     }
 }
 
+/// The DuckDB select rendering the watermark's text, and how ClickHouse takes it. Types are what
+/// a clickhouse member lands as (`atlatl_conn_clickhouse::types`): integers keep their width
+/// (128-bit ones as `HUGEINT`/`UHUGEINT`), `Decimal` up to 38 digits too (wider ones arrive as
+/// `DOUBLE`), `Bool` is `BOOLEAN`, `Date32` is `DATE`, `DateTime`/`DateTime64` are
+/// `TIMESTAMP WITH TIME ZONE`. Anything else (`UUID`, a `BLOB`) can't be a watermark.
+fn clickhouse_watermark_sql(
+    value: &str,
+    ty: Option<&str>,
+    lookback_us: Option<u64>,
+) -> Result<(String, ChLit)> {
+    let ty = ty.unwrap_or("VARCHAR").to_owned();
+    let upper = ty.to_ascii_uppercase();
+    let numeric = upper.starts_with("DECIMAL")
+        || [
+            "TINYINT",
+            "SMALLINT",
+            "INTEGER",
+            "BIGINT",
+            "HUGEINT",
+            "UTINYINT",
+            "USMALLINT",
+            "UINTEGER",
+            "UBIGINT",
+            "UHUGEINT",
+            "FLOAT",
+            "DOUBLE",
+            "BOOLEAN",
+        ]
+        .contains(&upper.as_str());
+    let temporal = upper == "DATE" || upper.starts_with("TIMESTAMP");
+    if !numeric && !temporal && upper != "VARCHAR" {
+        return Err(AtlatlError::config(format!(
+            "update_key is {ty}, which a clickhouse watermark can't compare (cast it to a number, date, timestamp or string in `from.query`)"
+        )));
+    }
+    let mut x = format!("CAST({} AS {ty})", atlatl_ingest::sql::literal(value));
+    if let Some(us) = lookback_us {
+        if !temporal {
+            return Err(AtlatlError::config(format!(
+                "update_key is {ty}; `lookback` needs a date or timestamp column"
+            )));
+        }
+        x = format!(
+            "CAST({x} - INTERVAL '{}' AS {ty})",
+            atlatl_core::config::types::interval_text(us)
+        );
+    }
+    let text = if upper == "DATE" {
+        format!("strftime({x}, '%Y-%m-%d')")
+    } else if temporal {
+        let t = if upper.contains("TIME ZONE") {
+            format!("timezone('UTC', {x})")
+        } else {
+            format!("CAST({x} AS TIMESTAMP)")
+        };
+        format!("strftime({t}, '%Y-%m-%d %H:%M:%S.%f')")
+    } else {
+        format!("({x})::VARCHAR")
+    };
+    let lit = match upper.as_str() {
+        t if t.starts_with("TIMESTAMP") => ChLit::Utc,
+        // Shortest text for a FLOAT is a Float64 literal to ClickHouse, a hair off the stored value.
+        "FLOAT" => ChLit::Cast("Float32".into()),
+        "HUGEINT" => ChLit::Cast("Int128".into()),
+        "UHUGEINT" => ChLit::Cast("UInt128".into()),
+        d if d.starts_with("DECIMAL") => ChLit::Cast(format!("Decimal{}", &ty["DECIMAL".len()..])),
+        _ if numeric => ChLit::Bare,
+        _ => ChLit::Quoted,
+    };
+    Ok((format!("SELECT {text}"), lit))
+}
+
 /// Query retries follow the replication's `retry`; the statement timeout the connection's
-/// `timeouts.statement`, the connect timeout its `timeouts.connect`.
+/// `timeouts.statement`, the connect timeout its `timeouts.connect`, and queries in flight its
+/// `max_concurrency`, across the run.
 fn clickhouse_options(
     rt: &Runtime,
     rep: &ReplicationPlan,
@@ -1284,11 +1538,24 @@ fn clickhouse_options(
             o.connect_timeout = c.0;
         }
     }
+    if let Some(n) = conn.common.max_concurrency {
+        let mut slots = rt
+            .clickhouse_slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        o.slots = Some(
+            slots
+                .entry(conn.name.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new((n as usize).max(1))))
+                .clone(),
+        );
+    }
     o
 }
 
 /// Query and object retries follow the replication's `retry`; statement timeout and sessions the
-/// connection's `timeouts.statement` and `max_concurrency`.
+/// connection's `timeouts.statement` and `max_concurrency`, the sessions from one wire pool per
+/// connection across the run.
 fn redshift_options(
     rt: &Runtime,
     rep: &ReplicationPlan,
@@ -1308,6 +1575,24 @@ fn redshift_options(
     }
     if let Some(n) = conn.common.max_concurrency {
         o.max_sessions = n as usize;
+    }
+    if let ConnectionKind::Redshift(r) = &conn.kind
+        && r.access == Some(atlatl_core::config::model::RedshiftAccess::Wire)
+        && let Some(w) = r.wire.as_deref()
+    {
+        let mut wires = rt.redshift_wires.lock().unwrap_or_else(|e| e.into_inner());
+        o.wire = match wires.get(&conn.name) {
+            Some(shared) => Some(shared.clone()),
+            // A bad `wire` block is left for `Redshift::new` to report.
+            None => atlatl_conn_redshift::wire::connect_options(w)
+                .and_then(|c| {
+                    atlatl_conn_redshift::Wire::new(c, o.max_sessions, o.statement_timeout)
+                })
+                .ok()
+                .inspect(|shared| {
+                    wires.insert(conn.name.clone(), shared.clone());
+                }),
+        };
     }
     o
 }
@@ -1983,14 +2268,140 @@ pub fn now_epoch() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use atlatl_core::config::types::Dur;
+
     #[test]
-    fn clickhouse_table_names() {
-        assert_eq!(super::clickhouse_table("default.eod"), "`default`.`eod`");
-        assert_eq!(super::clickhouse_table("db.a.b"), "`db`.`a.b`");
-        assert_eq!(super::clickhouse_table("t`x"), "`t\\`x`");
+    fn bind_rows_keep_exact_values_and_every_column() {
+        let rows = bind_rows(&[
+            r#"{"id": 170141183460469231731687303715884105727, "since": "2024-01-01", "x": null}"#
+                .into(),
+            r#"{"id": 12345678901234567890.123456789, "since": "o'k", "x": true}"#.into(),
+        ])
+        .expect("rows");
+        assert_eq!(
+            rows,
+            [
+                vec![
+                    Lit::Number("170141183460469231731687303715884105727".into()),
+                    Lit::String("2024-01-01".into()),
+                    Lit::Null
+                ],
+                vec![
+                    Lit::Number("12345678901234567890.123456789".into()),
+                    Lit::String("o'k".into()),
+                    Lit::Bool(true)
+                ],
+            ]
+        );
+        let e = bind_rows(&[r#"{"id": 1, "id": 2, "since": "x"}"#.into()]).expect_err("dup");
+        assert_eq!(
+            e,
+            "the query returns two columns named `id`; alias one of them"
+        );
+        let e = bind_rows(&[r#"{"ids": [1, 2]}"#.into()]).expect_err("list");
+        assert!(e.contains("must be a scalar"), "{e}");
     }
 
-    use super::*;
+    #[test]
+    fn clickhouse_lookback_keeps_sub_second_precision() {
+        let us = |s: &str| lookback_us(Some(Dur::parse(s).expect(s)));
+        assert_eq!(us("250ms"), Some(250_000));
+        assert_eq!(us("1500ms"), Some(1_500_000));
+        assert_eq!(us("2h"), Some(7_200_000_000));
+        assert_eq!(us("0"), None);
+        assert_eq!(lookback_us(None), None);
+    }
+
+    #[test]
+    fn clickhouse_watermarks_by_landed_type() {
+        let c = Connection::open_in_memory().expect("duckdb");
+        let render = |v: &str, ty: &str, lookback: Option<u64>| -> Result<String> {
+            let (sql, lit) = clickhouse_watermark_sql(v, Some(ty), lookback)?;
+            let t: String = c.query_row(&sql, [], |r| r.get(0)).expect(&sql);
+            Ok(lit.render(t))
+        };
+        let cases = [
+            ("-5", "TINYINT", "-5"),
+            ("-5", "SMALLINT", "-5"),
+            ("-5", "INTEGER", "-5"),
+            ("-9223372036854775808", "BIGINT", "-9223372036854775808"),
+            ("255", "UTINYINT", "255"),
+            ("65535", "USMALLINT", "65535"),
+            ("4294967295", "UINTEGER", "4294967295"),
+            ("18446744073709551615", "UBIGINT", "18446744073709551615"),
+            ("1.3", "FLOAT", "CAST('1.3' AS Float32)"),
+            ("1.5", "DOUBLE", "1.5"),
+            (
+                "-170141183460469231731687303715884105728",
+                "HUGEINT",
+                "CAST('-170141183460469231731687303715884105728' AS Int128)",
+            ),
+            (
+                "340282366920938463463374607431768211455",
+                "UHUGEINT",
+                "CAST('340282366920938463463374607431768211455' AS UInt128)",
+            ),
+            ("1.25", "DECIMAL(9,2)", "CAST('1.25' AS Decimal(9,2))"),
+            ("1.2500", "DECIMAL(18,4)", "CAST('1.2500' AS Decimal(18,4))"),
+            (
+                "12345678901234567890.5",
+                "DECIMAL(38,10)",
+                "CAST('12345678901234567890.5000000000' AS Decimal(38,10))",
+            ),
+            ("true", "BOOLEAN", "true"),
+            ("1900-10-01", "DATE", "'1900-10-01'"),
+            (
+                "2026-10-01 20:00:00.123456+00",
+                "TIMESTAMP WITH TIME ZONE",
+                "toDateTime64('2026-10-01 20:00:00.123456', 6, 'UTC')",
+            ),
+            (
+                "2026-10-01 16:00:00-04",
+                "TIMESTAMP WITH TIME ZONE",
+                "toDateTime64('2026-10-01 20:00:00.000000', 6, 'UTC')",
+            ),
+            (
+                "2026-10-01 20:00:00",
+                "TIMESTAMP",
+                "toDateTime64('2026-10-01 20:00:00.000000', 6, 'UTC')",
+            ),
+            ("abc", "VARCHAR", "'abc'"),
+        ];
+        for (v, ty, want) in cases {
+            assert_eq!(render(v, ty, None).expect(ty), want, "{ty}");
+        }
+        assert_eq!(
+            render("2026-10-08", "DATE", Some(7 * 86_400_000_000)).expect("date"),
+            "'2026-10-01'"
+        );
+        assert_eq!(
+            render(
+                "2026-10-01 20:00:00+00",
+                "TIMESTAMP WITH TIME ZONE",
+                Some(3_600_000_000)
+            )
+            .expect("ts"),
+            "toDateTime64('2026-10-01 19:00:00.000000', 6, 'UTC')"
+        );
+        assert_eq!(
+            render(
+                "2026-10-01 20:00:00+00",
+                "TIMESTAMP WITH TIME ZONE",
+                lookback_us(Some(Dur::parse("250ms").expect("dur")))
+            )
+            .expect("sub-second"),
+            "toDateTime64('2026-10-01 19:59:59.750000', 6, 'UTC')"
+        );
+        let e = render("5", "BIGINT", Some(60_000_000)).expect_err("numeric lookback");
+        assert!(
+            e.message.contains("needs a date or timestamp"),
+            "{}",
+            e.message
+        );
+        let e = clickhouse_watermark_sql("\\x01", Some("BLOB"), None).expect_err("blob");
+        assert!(e.message.contains("BLOB"), "{}", e.message);
+    }
 
     #[test]
     fn objects_and_globs() {

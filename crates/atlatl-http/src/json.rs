@@ -136,22 +136,78 @@ impl JValue {
         JValue::Object(pairs.into_iter().collect())
     }
 
-    /// A lossy `serde_json` copy (numbers become i64/u64/f64).
+    /// A `serde_json` copy. A number stays one when `serde_json` holds its value exactly (`1.50`
+    /// as 1.5, `1E2` as 100.0); one it can't (past 64 bits, more digits than an f64 keeps, `1e400`)
+    /// becomes a string of the exact text rather than a rounded or `null` value.
     pub fn to_serde(&self) -> serde_json::Value {
         match self {
             JValue::Null => serde_json::Value::Null,
             JValue::Bool(b) => (*b).into(),
-            JValue::Number(n) => n
-                .as_i64()
-                .map(Into::into)
-                .or_else(|| n.as_u64().map(Into::into))
-                .or_else(|| serde_json::Number::from_f64(n.as_f64()).map(serde_json::Value::Number))
-                .unwrap_or_default(),
+            JValue::Number(n) => match exact_number(n, false) {
+                Some(v) => serde_json::Value::Number(v),
+                None => serde_json::Value::String(n.as_str().to_owned()),
+            },
             JValue::String(s) => s.clone().into(),
             JValue::Array(a) => serde_json::Value::Array(a.iter().map(JValue::to_serde).collect()),
             JValue::Object(m) => serde_json::Value::Object(
                 m.iter().map(|(k, v)| (k.clone(), v.to_serde())).collect(),
             ),
+        }
+    }
+
+    /// A `serde_json` copy to persist and read back with [`JValue::from_serde_exact`]: a number
+    /// `serde_json` wouldn't write back digit for digit is kept as `{"$number": "<text>"}`, so it
+    /// returns as the same number with the same text, never a rounded one or a string. Keys are
+    /// written as is; only a real object shaped like a marker (one key `"$number"` holding a
+    /// numeric string, or one key `"$object"` holding an object) is wrapped as
+    /// `{"$object": <object>}`.
+    pub fn to_serde_exact(&self) -> serde_json::Value {
+        match self {
+            JValue::Number(n) => match exact_number(n, true) {
+                Some(v) => serde_json::Value::Number(v),
+                None => serde_json::json!({ EXACT_NUMBER: n.as_str() }),
+            },
+            JValue::Array(a) => {
+                serde_json::Value::Array(a.iter().map(JValue::to_serde_exact).collect())
+            }
+            JValue::Object(m) => {
+                let out: serde_json::Map<_, _> = m
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_serde_exact()))
+                    .collect();
+                if numeric_tag(&out).is_some() || literal_object(&out).is_some() {
+                    serde_json::json!({ EXACT_OBJECT: out })
+                } else {
+                    serde_json::Value::Object(out)
+                }
+            }
+            other => other.to_serde(),
+        }
+    }
+
+    /// What [`JValue::to_serde_exact`] wrote; anything else as [`From`] reads it. A one-key
+    /// `{"$number": <numeric string>}` is a number, and a one-key `{"$object": {...}}` is its
+    /// inner object taken literally (keys as is, values read on). Rows saved before this encoding
+    /// read back unchanged, except such a lone `$number` (a number) or `$object` (its inner
+    /// object).
+    pub fn from_serde_exact(v: &serde_json::Value) -> Self {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let Some(t) = numeric_tag(m) {
+                    return JValue::Number(Num(t.into()));
+                }
+                JValue::Object(
+                    literal_object(m)
+                        .unwrap_or(m)
+                        .iter()
+                        .map(|(k, v)| (k.clone(), JValue::from_serde_exact(v)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(a) => {
+                JValue::Array(a.iter().map(JValue::from_serde_exact).collect())
+            }
+            other => other.into(),
         }
     }
 
@@ -626,6 +682,99 @@ pub fn parse(bytes: &[u8]) -> Result<JValue, ParseError> {
     Ok(v)
 }
 
+const EXACT_NUMBER: &str = "$number";
+const EXACT_OBJECT: &str = "$object";
+
+/// The text of a one-key `{"$number": <numeric string>}`.
+fn numeric_tag(m: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
+    match m.get(EXACT_NUMBER) {
+        Some(serde_json::Value::String(t)) if m.len() == 1 && decimal_digits(t).is_some() => {
+            Some(t)
+        }
+        _ => None,
+    }
+}
+
+/// The inner object of a one-key `{"$object": {...}}`.
+fn literal_object(
+    m: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    match m.get(EXACT_OBJECT) {
+        Some(serde_json::Value::Object(o)) if m.len() == 1 => Some(o),
+        _ => None,
+    }
+}
+
+/// `n` as a `serde_json` number when it holds the same value, or with `digits` the same digits
+/// too (`1.50` isn't `1.5`).
+fn exact_number(n: &Num, digits: bool) -> Option<serde_json::Number> {
+    let text = n.as_str();
+    n.as_i64()
+        .map(serde_json::Number::from)
+        .or_else(|| n.as_u64().map(serde_json::Number::from))
+        .or_else(|| serde_json::Number::from_f64(n.as_f64()))
+        .filter(|v| {
+            let back = v.to_string();
+            if digits {
+                decimal_digits(&back) == decimal_digits(text)
+            } else {
+                cmp_numbers(&back, text) == std::cmp::Ordering::Equal
+            }
+        })
+}
+
+/// A JSON number's sign, digits (trailing zeros kept, so `1.10` isn't `1.1`) and the power of ten
+/// they're scaled by: how its text reads, whatever the exponent's spelling. `None` for text that
+/// isn't a number.
+fn decimal_digits(text: &str) -> Option<(bool, String, i64)> {
+    let (neg, t) = match text.strip_prefix('-') {
+        Some(t) => (true, t),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let (mantissa, exp) = match t.split_once(['e', 'E']) {
+        Some((m, e)) => (m, e.strip_prefix('+').unwrap_or(e).parse::<i64>().ok()?),
+        None => (t, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if int.is_empty() && frac.is_empty()
+        || !int.chars().chain(frac.chars()).all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let digits = format!("{int}{frac}");
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some((false, "0".into(), 0));
+    }
+    Some((neg, digits.to_owned(), exp.checked_sub(frac.len() as i64)?))
+}
+
+/// Two JSON numbers in exact numeric order, from their text (`1.0` and `1` are equal); text that
+/// isn't a number sorts as text.
+pub fn cmp_numbers(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (Some(x), Some(y)) = (decimal_digits(a), decimal_digits(b)) else {
+        return a.cmp(b);
+    };
+    // Trailing zeros moved into the exponent, so equal values have equal digits.
+    let norm = |(neg, d, e): (bool, String, i64)| {
+        let t = d.trim_end_matches('0');
+        if t.is_empty() {
+            return (0i8, String::new(), 0i128);
+        }
+        let e = e as i128 + (d.len() - t.len()) as i128;
+        (if neg { -1 } else { 1 }, t.to_owned(), e + t.len() as i128)
+    };
+    let ((sx, dx, mx), (sy, dy, my)) = (norm(x), norm(y));
+    let mag = || mx.cmp(&my).then_with(|| dx.cmp(&dy));
+    match sx.cmp(&sy) {
+        Ordering::Equal if sx == 0 => Ordering::Equal,
+        Ordering::Equal if sx > 0 => mag(),
+        Ordering::Equal => mag().reverse(),
+        o => o,
+    }
+}
+
 pub fn parse_str(s: &str) -> Result<JValue, ParseError> {
     parse(s.as_bytes())
 }
@@ -636,6 +785,176 @@ mod tests {
 
     fn rt(s: &str) -> String {
         parse_str(s).expect(s).to_string()
+    }
+
+    #[test]
+    fn serde_copies_keep_number_values() {
+        let v = parse_str(
+            r#"[1, -9223372036854775808, 18446744073709551615, 1.5, 0.1, 1e+300, 1.0, -0.0, 1.50, 1E2, 1700000000.100,
+                170141183460469231731687303715884105727, 1.10, 12345678901234567890.123, 1e400, 2E-7]"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            v.to_serde(),
+            serde_json::json!([
+                1,
+                -9223372036854775808i64,
+                18446744073709551615u64,
+                1.5,
+                0.1,
+                1e300,
+                1.0,
+                -0.0,
+                1.5,
+                100.0,
+                1700000000.1,
+                "170141183460469231731687303715884105727",
+                1.1,
+                "12345678901234567890.123",
+                "1e400",
+                2e-7
+            ])
+        );
+    }
+
+    fn exact_round_trip(v: &JValue) -> JValue {
+        let text = serde_json::to_string(&v.to_serde_exact()).expect("text");
+        let back = JValue::from_serde_exact(&serde_json::from_str(&text).expect("json"));
+        assert_eq!(&back, v);
+        assert_eq!(back.to_string(), v.to_string());
+        back
+    }
+
+    #[test]
+    fn exact_serde_copies_round_trip() {
+        let v = parse_str(
+            r#"{"cursor": 9007199254740995.0, "id": 170141183460469231731687303715884105727, "n": 5, "s": "9007199254740995.0", "l": [1.10, {"$number": "x"}]}"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            v.to_serde_exact(),
+            serde_json::json!({
+                "cursor": {"$number": "9007199254740995.0"},
+                "id": {"$number": "170141183460469231731687303715884105727"},
+                "n": 5,
+                "s": "9007199254740995.0",
+                "l": [{"$number": "1.10"}, {"$number": "x"}]
+            })
+        );
+        exact_round_trip(&v);
+    }
+
+    #[test]
+    fn exact_serde_wraps_only_marker_shaped_objects() {
+        for (src, want) in [
+            (
+                r#"{"$number": "123"}"#,
+                serde_json::json!({"$object": {"$number": "123"}}),
+            ),
+            (
+                r#"{"$number": "-1.5e3"}"#,
+                serde_json::json!({"$object": {"$number": "-1.5e3"}}),
+            ),
+            (
+                r#"{"$object": {"a": 1}}"#,
+                serde_json::json!({"$object": {"$object": {"a": 1}}}),
+            ),
+            (
+                r#"{"$object": {"$object": {}}}"#,
+                serde_json::json!({"$object": {"$object": {"$object": {"$object": {}}}}}),
+            ),
+            (
+                r#"{"$object": {"$number": "1"}}"#,
+                serde_json::json!({"$object": {"$object": {"$object": {"$number": "1"}}}}),
+            ),
+            (
+                r#"{"$number": "7", "$object": true}"#,
+                serde_json::json!({"$number": "7", "$object": true}),
+            ),
+            (
+                r#"{"$number": "7", "$object": false}"#,
+                serde_json::json!({"$number": "7", "$object": false}),
+            ),
+            (r#"{"$object": 1}"#, serde_json::json!({"$object": 1})),
+            (
+                r#"{"$object": {}, "k": 1}"#,
+                serde_json::json!({"$object": {}, "k": 1}),
+            ),
+            (r#"{"$number": 5}"#, serde_json::json!({"$number": 5})),
+            (r#"{"$number": "x"}"#, serde_json::json!({"$number": "x"})),
+            (
+                r#"{"$number": "1", "k": 2}"#,
+                serde_json::json!({"$number": "1", "k": 2}),
+            ),
+            (
+                r#"{"$number": 9007199254740995.0}"#,
+                serde_json::json!({"$number": {"$number": "9007199254740995.0"}}),
+            ),
+            (
+                r#"{"$x": 1, "$$y": [{"$number": "1"}]}"#,
+                serde_json::json!({"$x": 1, "$$y": [{"$object": {"$number": "1"}}]}),
+            ),
+            (
+                r#"{"$$ref": "/a", "$": "$$"}"#,
+                serde_json::json!({"$$ref": "/a", "$": "$$"}),
+            ),
+            (
+                r#"[[{"$number": "9"}, 9007199254740995.0, {"$$ref": 1}, {"$object": {"k": {"$number": "2"}}}]]"#,
+                serde_json::json!([[
+                    {"$object": {"$number": "9"}},
+                    {"$number": "9007199254740995.0"},
+                    {"$$ref": 1},
+                    {"$object": {"$object": {"k": {"$object": {"$number": "2"}}}}}
+                ]]),
+            ),
+        ] {
+            let v = parse_str(src).expect(src);
+            assert_eq!(v.to_serde_exact(), want, "{src}");
+            exact_round_trip(&v);
+        }
+    }
+
+    #[test]
+    fn exact_serde_reads_legacy_rows() {
+        let old = serde_json::json!({
+            "$x": 1,
+            "$$ref": "/defs",
+            "a": [{"$number": "x"}, {"$y": {"$number": "12"}}, {"$$ref": {"$$$z": 2}}],
+            "o": [{"$object": 1}, {"$object": {"$number": "3"}}, {"$object": {}, "k": 1}]
+        });
+        assert_eq!(
+            JValue::from_serde_exact(&old),
+            parse_str(
+                r#"{"$x": 1, "$$ref": "/defs", "a": [{"$number": "x"}, {"$y": 12}, {"$$ref": {"$$$z": 2}}],
+                    "o": [{"$object": 1}, {"$number": "3"}, {"$object": {}, "k": 1}]}"#
+            )
+            .expect("parse")
+        );
+    }
+
+    #[test]
+    fn numbers_compare_exactly() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        for (a, b, want) in [
+            ("9007199254740993.0", "9007199254740992.0", Greater),
+            ("9007199254740993", "9007199254740992", Greater),
+            (
+                "340282366920938463463374607431768211457",
+                "340282366920938463463374607431768211456",
+                Greater,
+            ),
+            ("1.0", "1", Equal),
+            ("1e3", "1000.00", Equal),
+            ("-0.0", "0", Equal),
+            ("0.1", "0.10000000000000001", Less),
+            ("-2", "-10", Greater),
+            ("-1e-400", "0", Less),
+            ("1e400", "9e399", Greater),
+            ("12.5", "1.25e1", Equal),
+        ] {
+            assert_eq!(cmp_numbers(a, b), want, "{a} vs {b}");
+            assert_eq!(cmp_numbers(b, a), want.reverse(), "{b} vs {a}");
+        }
     }
 
     #[test]

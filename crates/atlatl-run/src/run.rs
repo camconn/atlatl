@@ -300,6 +300,8 @@ async fn open(
         templates: Templates::new(),
         vars,
         rest_clients: Default::default(),
+        clickhouse_slots: Default::default(),
+        redshift_wires: Default::default(),
         for_each_errors: Default::default(),
         dry_run,
         retry_rejects: false,

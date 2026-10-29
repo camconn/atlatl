@@ -44,7 +44,8 @@ pub struct Cursor {
     pub column: String,
     /// The stored watermark, as text.
     pub stored: Option<String>,
-    pub lookback_s: Option<u64>,
+    /// `lookback` in microseconds.
+    pub lookback_us: Option<u64>,
     pub inclusive: bool,
     pub include_nulls: bool,
 }
@@ -82,7 +83,7 @@ pub fn cursor_predicate(cur: &Cursor, cols: &[SourceColumn]) -> Option<String> {
     }
     let ty = comparable(&col.typname)?;
     let text = ty == "text";
-    if cur.lookback_s.is_some() && !matches!(ty, "date" | "timestamp" | "timestamptz") {
+    if cur.lookback_us.is_some() && !matches!(ty, "date" | "timestamp" | "timestamptz") {
         return None;
     }
     let i = ident(&col.name);
@@ -93,8 +94,11 @@ pub fn cursor_predicate(cur: &Cursor, cols: &[SourceColumn]) -> Option<String> {
     };
     let bound = cur.stored.as_ref().map(|v| {
         let lit = format!("{}::{ty}", literal(v));
-        let lit = match cur.lookback_s {
-            Some(s) => format!("({lit} - {}::interval)", literal(&format!("{s} seconds"))),
+        let lit = match cur.lookback_us {
+            Some(n) => format!(
+                "({lit} - {}::interval)",
+                literal(&atlatl_core::config::types::interval_text(n))
+            ),
             None => lit,
         };
         format!("{lhs} {} {lit}", if cur.inclusive { ">=" } else { ">" })
@@ -670,7 +674,7 @@ mod tests {
         let cur = |c: &str, v: Option<&str>| Cursor {
             column: c.into(),
             stored: v.map(Into::into),
-            lookback_s: None,
+            lookback_us: None,
             inclusive: true,
             include_nulls: false,
         };
@@ -686,7 +690,7 @@ mod tests {
         assert_eq!(
             cursor_predicate(
                 &Cursor {
-                    lookback_s: Some(3600),
+                    lookback_us: Some(3_600_000_000),
                     inclusive: false,
                     include_nulls: true,
                     ..cur("at", Some("2024-01-02 00:00:00+00"))
@@ -695,19 +699,33 @@ mod tests {
             )
             .as_deref(),
             Some(
-                r#"("at" > ('2024-01-02 00:00:00+00'::timestamptz - '3600 seconds'::interval) OR "at" IS NULL)"#
+                r#"("at" > ('2024-01-02 00:00:00+00'::timestamptz - '1 hours 0 seconds 0 microseconds'::interval) OR "at" IS NULL)"#
             )
         );
         assert_eq!(
             cursor_predicate(
                 &Cursor {
-                    lookback_s: Some(5),
+                    lookback_us: Some(5),
                     ..cur("id", Some("7"))
                 },
                 &cols
             ),
             None,
             "a lookback only pushes on dates and timestamps"
+        );
+        assert_eq!(
+            cursor_predicate(
+                &Cursor {
+                    lookback_us: Some(250_000),
+                    ..cur("at", Some("2024-01-02 00:00:00+00"))
+                },
+                &cols
+            )
+            .as_deref(),
+            Some(
+                r#""at" >= ('2024-01-02 00:00:00+00'::timestamptz - '0 hours 0 seconds 250000 microseconds'::interval)"#
+            ),
+            "a sub-second lookback keeps its precision"
         );
         assert_eq!(
             cursor_predicate(&cur("name", Some("it's")), &cols).as_deref(),

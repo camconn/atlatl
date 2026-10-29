@@ -469,6 +469,66 @@ async fn daily_and_hourly_families_with_an_adopted_cursor() {
     daily_hourly_and_cut_over(&src).await;
 }
 
+/// `max_concurrency` caps the connection's sessions across the run, not per unit: two
+/// replications that overlap on one connection share one pool. The role takes one connection, so
+/// a second session would fail with "too many connections for role".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn max_concurrency_caps_sessions_across_replications() {
+    let src = Source::pg16().await;
+    let role = format!("rw_one_{}", src.database);
+    src.sql(&format!(
+        "CREATE SCHEMA src;
+         CREATE TABLE src.base (id int NOT NULL);
+         INSERT INTO src.base VALUES (1), (2);
+         CREATE VIEW src.slow_a AS SELECT b.id FROM src.base b, pg_sleep(1);
+         CREATE VIEW src.slow_b AS SELECT b.id FROM src.base b, pg_sleep(1);
+         CREATE ROLE {role} LOGIN PASSWORD 'pw' CONNECTION LIMIT 1;
+         GRANT USAGE ON SCHEMA src TO {role};
+         GRANT SELECT ON ALL TABLES IN SCHEMA src TO {role};
+         GRANT SELECT ON svv_columns, svv_tables TO {role}"
+    ))
+    .await;
+    let one = format!(
+        "  one:
+    type: redshift
+    read_only: true
+    access: wire
+    max_concurrency: 1
+    wire: {{host: {}, port: {}, database: {}, user: {role}, password: pw, sslmode: disable}}
+",
+        src.host, src.port, src.database
+    );
+    let p = Project::with_connections(
+        &src,
+        "replications:
+  a:
+    source: one
+    target: lake
+    streams:
+      - {id: one/a, mode: full-refresh, from: {table: src.slow_a}, object: br.slow_a, primary_key: [id]}
+  b:
+    source: one
+    target: lake
+    streams:
+      - {id: one/b, mode: full-refresh, from: {table: src.slow_b}, object: br.slow_b, primary_key: [id]}
+",
+        &one,
+    );
+    let r = p.run(&["a", "b"]).await;
+    r.ok();
+    // A per-unit pool opens a second session, which the role refuses; the query retry would then
+    // hide it, so no attempt may have met the limit.
+    assert!(!r.stderr.contains("too many connections"), "{}", r.stderr);
+    assert_eq!(
+        p.lake_one(
+            "SELECT ((SELECT count(*) FROM lake.br.slow_a) + (SELECT count(*) FROM lake.br.slow_b))::VARCHAR"
+        ),
+        "4"
+    );
+    src.sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
+        .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_that_keeps_dropping_still_lands_every_row_once() {
     let pg = atlatl_testkit::pg16();

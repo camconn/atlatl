@@ -960,3 +960,49 @@ async fn instance_selection_runs_only_the_named_instances() {
     let e2 = picked(&["l[c]"]).await.expect_err("plan-time");
     assert!(e2.message.contains("has no instance `c`"), "{e2}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn for_each_items_keep_their_exact_values() {
+    let e = setup(
+        atlatl_testkit::pg16(),
+        r#"replications:
+  wide:
+    source: lake
+    target: lake
+    for_each: {over: {query: "SELECT 170141183460469231731687303715884105727::HUGEINT AS id", connection: lake}, as: t}
+    streams:
+      - {id: w/wide, mode: incremental, primary_key: [id], from: {query: "SELECT '{{ t }}' AS id"}, object: br.wide}
+  scaled:
+    source: lake
+    target: lake
+    for_each: {over: {query: "SELECT 1.10::numeric(4,2) AS v", connection: app}, as: t}
+    streams:
+      - {id: w/scaled, mode: incremental, primary_key: [v], from: {query: "SELECT '{{ t }}' AS v"}, object: br.scaled}
+"#,
+        "",
+        "",
+        &[],
+    )
+    .await;
+    let r = go(&e, &Buf::default()).await;
+    let names: Vec<&str> = r
+        .replications
+        .iter()
+        .map(|x| x.replication.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "wide[170141183460469231731687303715884105727]",
+            "scaled[1.1]"
+        ],
+        "{:?}",
+        r.replications.iter().map(|x| &x.error).collect::<Vec<_>>()
+    );
+    assert!(r.replications.iter().all(|x| x.status.is_success()));
+    assert_eq!(
+        lake_rows(&e, "SELECT id FROM lake.br.wide"),
+        ["170141183460469231731687303715884105727"]
+    );
+    assert_eq!(lake_rows(&e, "SELECT v FROM lake.br.scaled"), ["1.1"]);
+}

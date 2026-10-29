@@ -624,15 +624,29 @@ fn check_stream(
                 &mode.span,
             );
         }
-        if let Some(uk) = &c.update_key {
-            err(
+        use crate::template::{
+            INCREMENTAL_VALUE, INCREMENTAL_WHERE_COND, uses_incremental_placeholders,
+        };
+        let query = c.from.as_ref().and_then(|f| f.query.as_deref());
+        match (&c.update_key, query.map(uses_incremental_placeholders)) {
+            (None, Some(true)) => err(
                 diags,
                 "update-key",
                 format!(
-                    "stream `{id}`: clickhouse sources don't take `update_key` (filter in `from.query`)"
+                    "stream `{id}`: `from.query` reads `{INCREMENTAL_WHERE_COND}` or `{INCREMENTAL_VALUE}`, which need `update_key`"
+                ),
+                &s.id.span,
+            ),
+            // Otherwise every run pulls the whole source for the lake-side filter to discard.
+            (Some(uk), Some(false)) => err(
+                diags,
+                "update-key",
+                format!(
+                    "stream `{id}`: `update_key` needs `from.query` to bound the pull with `{INCREMENTAL_WHERE_COND}` or `{INCREMENTAL_VALUE}`"
                 ),
                 &uk.span,
-            );
+            ),
+            _ => {}
         }
     }
     check_bind(s, src, types, templates, diags);
@@ -1440,6 +1454,31 @@ fn check_bind(
                 format!("stream `{id}`: `bind.{name}.batch` must be at least 1"),
                 at,
             );
+        }
+        if cfg.fallback.as_ref().is_some_and(|f| f.trim().is_empty()) {
+            err(
+                diags,
+                "bind",
+                format!("stream `{id}`: `bind.{name}.fallback` is empty"),
+                at,
+            );
+        }
+        match cfg.concurrency {
+            Some(0) => err(
+                diags,
+                "bind",
+                format!("stream `{id}`: `bind.{name}.concurrency` must be at least 1"),
+                at,
+            ),
+            Some(_) if cfg.batch.is_none() => err(
+                diags,
+                "bind",
+                format!(
+                    "stream `{id}`: `bind.{name}.concurrency` applies to a batched list (set `batch`)"
+                ),
+                at,
+            ),
+            _ => {}
         }
     }
     let batched: Vec<&str> = b

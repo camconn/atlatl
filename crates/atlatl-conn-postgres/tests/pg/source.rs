@@ -432,14 +432,14 @@ async fn cursor_predicates_run_in_postgres(pg: &'static Postgres) {
     let cur = |col: &str, v: Option<&str>| source::Cursor {
         column: col.into(),
         stored: v.map(Into::into),
-        lookback_s: None,
+        lookback_us: None,
         inclusive: true,
         include_nulls: false,
     };
     assert_eq!(count(&cur("at", Some("2024-01-04 00:00:00+00"))), (3, true));
     assert_eq!(
         count(&source::Cursor {
-            lookback_s: Some(86_400),
+            lookback_us: Some(86_400_000_000),
             include_nulls: true,
             inclusive: false,
             ..cur("at", Some("2024-01-04 00:00:00+00"))
@@ -454,5 +454,40 @@ async fn cursor_predicates_run_in_postgres(pg: &'static Postgres) {
         "byte-wise, as the engine compares: 'Z' < 'n3'"
     );
     assert_eq!(count(&cur("tags", Some("x"))), (6, false));
+
+    seed(
+        &o,
+        "CREATE TABLE dst (id int PRIMARY KEY, at timestamptz);
+         INSERT INTO dst VALUES (1, '2026-03-08 05:29:59+00'), (2, '2026-03-08 05:30:00+00'),
+           (3, '2026-03-08 06:00:00+00');",
+    )
+    .await;
+    let dst_cols = s.columns("public", "dst", None, &[]).await.expect("cols");
+    let pred = source::cursor_predicate(
+        &source::Cursor {
+            lookback_us: Some(86_400_000_000),
+            ..cur("at", Some("2026-03-09 01:30:00-04"))
+        },
+        &dst_cols,
+    )
+    .expect("pred");
+    let pg_session = connect(&o).await.expect("connect");
+    let client = pg_session.client();
+    client
+        .batch_execute("SET TimeZone = 'America/New_York'")
+        .await
+        .expect("tz");
+    let ids: Vec<i32> = client
+        .query(&format!("SELECT id FROM dst WHERE {pred} ORDER BY id"), &[])
+        .await
+        .expect("dst")
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(
+        ids,
+        [2, 3],
+        "1d back across spring-forward is 24 elapsed hours"
+    );
     s.close().await;
 }

@@ -812,16 +812,23 @@ pub struct StreamConfig {
     pub bind: Option<IndexMap<String, BindConfig>>,
 }
 
-/// One `bind` list: the single column of `query`'s rows, as SQL literals.
+/// One `bind` list: `query`'s rows as SQL literals, a tuple per row when it returns several
+/// columns.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BindConfig {
     /// SQL, never templated.
     pub query: String,
+    /// Run instead of `query` while the stream's target doesn't exist yet (its first run), so
+    /// `query` can read the target. SQL, never templated.
+    pub fallback: Option<String>,
     /// A lake, duckdb or postgres connection, as for `for_each.over`.
     pub connection: String,
-    /// Split the list into `IN` lists of at most this many items, one source query each.
+    /// Split the list into lists of at most this many rows, one source query each.
     pub batch: Option<u64>,
+    /// Batches in flight at once (a batched list only). Default 1. The source connection's
+    /// `max_concurrency` caps every query on it across the run.
+    pub concurrency: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]

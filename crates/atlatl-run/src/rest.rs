@@ -313,7 +313,20 @@ pub(crate) async fn query_items(
     except_landed: &[String],
     target: Option<(String, String, String)>,
 ) -> Result<Vec<JValue>> {
-    let texts: Vec<String> = if let Some(lake) = rt.lakes.get(conn) {
+    let texts = query_rows(rt, session, sql, conn).await?;
+    let items: Vec<JValue> = texts.iter().map(|t| row_item(t)).collect::<Result<_>>()?;
+    except_landed_items(session, items, except_landed, target).await
+}
+
+/// `sql`'s rows as JSON objects, unparsed, from a lake (this session), DuckDB file or Postgres
+/// connection.
+pub(crate) async fn query_rows(
+    rt: &Runtime,
+    session: &mut Session,
+    sql: &str,
+    conn: &str,
+) -> Result<Vec<String>> {
+    Ok(if let Some(lake) = rt.lakes.get(conn) {
         let q = format!("SELECT to_json(q)::VARCHAR FROM ({sql}) q");
         let read = move |c: &mut duckdb::Connection| {
             let mut s = c.prepare(&q).map_err(db)?;
@@ -370,9 +383,7 @@ pub(crate) async fn query_items(
                 })
                 .collect::<Result<_>>()?
         }
-    };
-    let items: Vec<JValue> = texts.iter().map(|t| row_item(t)).collect::<Result<_>>()?;
-    except_landed_items(session, items, except_landed, target).await
+    })
 }
 
 /// `items` minus those whose `except_landed` values (as text) are already in the stream's target
@@ -777,7 +788,7 @@ pub async fn stage(
     }
     if let Some(serde_json::Value::Object(m)) = &state_before {
         for (k, v) in m {
-            vars.sync.insert(k.clone(), jv(v));
+            vars.sync.insert(k.clone(), JValue::from_serde_exact(v));
         }
     }
 
@@ -831,7 +842,7 @@ pub async fn stage(
         .iter()
         .map(|r| OpenReject {
             key: r.reject_key.clone(),
-            request: JValue::from(&r.request),
+            request: JValue::from_serde_exact(&r.request),
             class: r.error_class.clone(),
         })
         .collect();
@@ -1164,7 +1175,7 @@ pub async fn stage(
         value: serde_json::Value::Object(
             out.sync
                 .iter()
-                .map(|(k, v)| (k.clone(), to_serde(v)))
+                .map(|(k, v)| (k.clone(), v.to_serde_exact()))
                 .collect(),
         ),
         config_hash: sp.config_hash.clone(),
@@ -1179,7 +1190,7 @@ pub async fn stage(
             stream_id: sp.state_id().to_owned(),
             member: state_member.clone(),
             reject_key: r.key.clone(),
-            request: to_serde(&r.request),
+            request: r.request.to_serde_exact(),
             raw: r.raw.clone(),
             error_class: r.class.clone(),
             error: atlatl_core::redact::redact(&r.error).into_owned(),

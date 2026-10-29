@@ -149,6 +149,16 @@ pub fn bind_marker(name: &str) -> String {
     format!("/*atlatl:bind:{name}*/")
 }
 
+/// `update_key` placeholders in a clickhouse `from.query` (06 §11), filled by the runner with the
+/// stored watermark's condition and value. Single braces, so templating leaves them alone.
+pub const INCREMENTAL_WHERE_COND: &str = "{incremental_where_cond}";
+pub const INCREMENTAL_VALUE: &str = "{incremental_value}";
+
+/// Whether `query` reads the watermark through either placeholder.
+pub fn uses_incremental_placeholders(query: &str) -> bool {
+    query.contains(INCREMENTAL_WHERE_COND) || query.contains(INCREMENTAL_VALUE)
+}
+
 pub fn is_template(s: &str) -> bool {
     s.contains("{{") || s.contains("{%") || s.contains("{#")
 }

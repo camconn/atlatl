@@ -22,8 +22,6 @@ const ROWS: i64 = 200_000;
 type Hook = Box<dyn FnMut(u64) -> Option<Fault> + Send>;
 
 enum Fault {
-    /// `pg_terminate_backend` on the export's backend, found by its marker filter.
-    Terminate,
     /// Close every proxied connection, then accept new ones again.
     Bounce,
     /// Stop forwarding on every open relay connection, without closing it.
@@ -36,10 +34,7 @@ struct DuckSink {
     raw: RawTable,
     appends: u64,
     resets: u64,
-    terminated: i64,
     hook: Option<Hook>,
-    side: Option<tokio_postgres::Client>,
-    marker: String,
     proxy: Option<(String, String)>,
     relay: Option<Relay>,
 }
@@ -54,10 +49,7 @@ impl DuckSink {
             raw,
             appends: 0,
             resets: 0,
-            terminated: 0,
             hook: None,
-            side: None,
-            marker: String::new(),
             proxy: None,
             relay: None,
         }
@@ -74,17 +66,6 @@ impl Sink for DuckSink {
         self.appends += 1;
         let fault = self.hook.as_mut().and_then(|h| h(self.appends));
         match fault {
-            Some(Fault::Terminate) => {
-                let side = self.side.as_ref().unwrap();
-                self.terminated += side
-                    .query_one(
-                        "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query LIKE $1 AND pid <> pg_backend_pid() AND backend_type = 'client backend'",
-                        &[&format!("%{}%", self.marker)],
-                    )
-                    .await
-                    .unwrap()
-                    .get::<_, i64>(0);
-            }
             Some(Fault::Bounce) => {
                 let (api, name) = self.proxy.clone().unwrap();
                 tokio::task::spawn_blocking(move || {
@@ -285,6 +266,78 @@ fn assert_complete(sink: &DuckSink, rows: i64) {
     );
 }
 
+/// Row gates that stop the export's backend mid-result so it can be terminated with rows still
+/// unproduced: the rows with `k = at[i]` take advisory lock `i + 1`, held by the side connection
+/// until that gate opens. A kill elsewhere can land after the server has written its whole
+/// result, which the client then reads to the end and never sees dropped.
+struct Gates {
+    stop: CancellationToken,
+    task: tokio::task::JoinHandle<(tokio_postgres::Client, i64)>,
+}
+
+impl Gates {
+    fn filter(at: &[i32]) -> String {
+        let arms: String = at
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                format!(
+                    " WHEN \"k\" = {k} THEN pg_advisory_xact_lock_shared({})::text = ''",
+                    i + 1
+                )
+            })
+            .collect();
+        format!("CASE{arms} ELSE TRUE END")
+    }
+
+    /// Terminates each backend waiting at a gate (the export, by `marker`), opening the next gate
+    /// after each kill when `open`.
+    async fn start(side: tokio_postgres::Client, marker: &str, gates: usize, open: bool) -> Self {
+        for i in 1..=gates as i64 {
+            side.execute("SELECT pg_advisory_lock($1)", &[&i])
+                .await
+                .unwrap();
+        }
+        let stop = CancellationToken::new();
+        let (s, marker) = (stop.clone(), format!("%{marker}%"));
+        let task = tokio::spawn(async move {
+            let mut kills = 0i64;
+            while !s.is_cancelled() {
+                let waiting = side
+                    .query_opt(
+                        "SELECT pid FROM pg_stat_activity WHERE query LIKE $1 AND wait_event_type = 'Lock' AND wait_event = 'advisory' AND pid <> pg_backend_pid() AND backend_type = 'client backend'",
+                        &[&marker],
+                    )
+                    .await
+                    .unwrap();
+                let Some(pid) = waiting.map(|r| r.get::<_, i32>(0)) else {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                };
+                let gone: bool = side
+                    .query_one("SELECT pg_terminate_backend($1, 10000)", &[&pid])
+                    .await
+                    .unwrap()
+                    .get(0);
+                assert!(gone, "backend {pid} still running");
+                kills += 1;
+                if open {
+                    side.execute("SELECT pg_advisory_unlock($1)", &[&kills])
+                        .await
+                        .unwrap();
+                }
+            }
+            (side, kills)
+        });
+        Self { stop, task }
+    }
+
+    async fn kills(self) -> (tokio_postgres::Client, i64) {
+        self.stop.cancel();
+        self.task.await.unwrap()
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn exports_typed_rows_by_key_with_filters_pushed_down() {
     let pg = atlatl_testkit::pg16();
@@ -370,6 +423,14 @@ async fn exports_typed_rows_by_key_with_filters_pushed_down() {
 async fn a_terminated_backend_resumes_after_the_last_key_group() {
     let pg = atlatl_testkit::pg16();
     let d = seed(pg).await;
+    // Rows stream in key order, so each gate is reached after the groups before it are out.
+    d.client
+        .batch_execute(&format!(
+            "CREATE INDEX ON src.wide (k); ALTER DATABASE {} SET enable_sort = off",
+            d.db
+        ))
+        .await
+        .unwrap();
     let rs = Redshift::new(&wire_conn(pg, &d.db), opts(3)).unwrap();
     let marker = atlatl_testkit::unique("m");
     // Key `k` alone repeats 3× per value: groups are held back at batch edges.
@@ -377,25 +438,37 @@ async fn a_terminated_backend_resumes_after_the_last_key_group() {
         &rs,
         "src.wide",
         &["k"],
-        vec![format!("'{marker}' = '{marker}'")],
+        vec![
+            format!("'{marker}' = '{marker}'"),
+            Gates::filter(&[20_000, 40_000]),
+        ],
     )
     .await;
+    let gates = Gates::start(d.client, &marker, 2, true).await;
     let mut sink = DuckSink::new(req.columns.clone());
-    sink.marker = marker;
-    sink.side = Some(d.client);
-    sink.hook = Some(Box::new(|n| {
-        [2, 100].contains(&n).then_some(Fault::Terminate)
-    }));
     let out = rs
         .export(&req, &mut sink, &CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(sink.terminated, 2);
+    assert_eq!(gates.kills().await.1, 2);
     assert_eq!(out.resumes, 2, "{:?}", out.retries);
+    // Both reads made progress first: each resume continued rather than starting over.
+    assert!(
+        out.retries.iter().all(|r| r.attempt == 1),
+        "{:?}",
+        out.retries
+    );
     assert_eq!(out.restarts, 0);
     assert_eq!(sink.resets, 0);
     assert_eq!(out.rows as i64, ROWS);
-    assert_eq!(out.retries[0].class, ErrorClass::Transient);
+    assert!(
+        out.retries
+            .iter()
+            .all(|r| r.class == ErrorClass::Transient
+                && r.message.contains("terminating connection")),
+        "{:?}",
+        out.retries
+    );
     assert_complete(&sink, ROWS);
 }
 
@@ -456,31 +529,29 @@ async fn a_keyless_read_starts_over_and_gives_up_after_its_attempts() {
         &rs,
         "src.wide",
         &[],
-        vec![format!("'{marker}' = '{marker}'")],
+        vec![format!("'{marker}' = '{marker}'"), Gates::filter(&[20_000])],
     )
     .await;
+    let gates = Gates::start(d.client, &marker, 1, true).await;
     let mut sink = DuckSink::new(req.columns.clone());
-    sink.marker = marker.clone();
-    sink.side = Some(d.client);
-    sink.hook = Some(Box::new(|n| (n == 3).then_some(Fault::Terminate)));
     let out = rs
         .export(&req, &mut sink, &CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(sink.terminated, 1);
+    let (side, kills) = gates.kills().await;
+    assert_eq!(kills, 1);
     assert_eq!((out.resumes, out.restarts, sink.resets), (0, 1, 1));
     assert_eq!(out.rows as i64, ROWS);
     assert_complete(&sink, ROWS);
 
     // Every attempt dropped: the last error, after `max_attempts`.
+    let gates = Gates::start(side, &marker, 1, false).await;
     let mut sink2 = DuckSink::new(req.columns.clone());
-    sink2.marker = marker;
-    sink2.side = sink.side.take();
-    sink2.hook = Some(Box::new(|n| (n >= 3).then_some(Fault::Terminate)));
     let e = rs
         .export(&req, &mut sink2, &CancellationToken::new())
         .await
         .unwrap_err();
+    assert_eq!(gates.kills().await.1, 2);
     assert_eq!(e.class, ErrorClass::Transient, "{e}");
     assert!(e.message.contains("after 2 attempts"), "{e}");
 }
@@ -546,10 +617,7 @@ async fn data_api_access_needs_unload() {
         raw: RawTable::new("x", vec![]),
         appends: 0,
         resets: 0,
-        terminated: 0,
         hook: None,
-        side: None,
-        marker: String::new(),
         proxy: None,
         relay: None,
     };

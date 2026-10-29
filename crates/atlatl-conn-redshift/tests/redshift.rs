@@ -963,9 +963,18 @@ async fn wire_kill_cancels_the_backend() {
     assert_eq!(e.class, ErrorClass::Killed, "{e}");
     assert!(e.message.contains("pg_cancel_backend: true"), "{e}");
     assert!(t0.elapsed() < Duration::from_secs(10));
-    let r = rs
-        .query("SELECT count(*) AS n FROM pg_stat_activity WHERE query LIKE 'SELECT pg_sleep(30)%' AND state = 'active'", "q", &CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(r.int(0, "n"), Some(0));
+    // The cancel's error reaches us before the backend reports idle.
+    let mut active = None;
+    for _ in 0..50 {
+        active = rs
+            .query("SELECT count(*) AS n FROM pg_stat_activity WHERE query LIKE 'SELECT pg_sleep(30)%' AND state = 'active'", "q", &CancellationToken::new())
+            .await
+            .unwrap()
+            .int(0, "n");
+        if active == Some(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(active, Some(0));
 }

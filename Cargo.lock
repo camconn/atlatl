@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-cdc"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "atlatl-testkit",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-cli"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-cdc",
  "atlatl-conn-ducklake",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-clickhouse"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "atlatl-testkit",
@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-delta"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "atlatl-ingest",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-ducklake"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-conn-postgres",
  "atlatl-core",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-files"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "atlatl-ingest",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-pgrepl"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-conn-postgres",
  "atlatl-core",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-postgres"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "arrow",
  "atlatl-core",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-redshift"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-conn-files",
  "atlatl-conn-postgres",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-conn-sqlite"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "arrow",
  "atlatl-core",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-core"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-engine"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "arrow",
  "atlatl-core",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-http"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "base64 0.23.1",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-ingest"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "atlatl-engine",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-run"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "arrow",
  "atlatl-cdc",
@@ -726,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-state"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "atlatl-engine",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "atlatl-testkit"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "atlatl-core",
  "duckdb",
